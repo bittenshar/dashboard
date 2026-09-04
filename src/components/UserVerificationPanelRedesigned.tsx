@@ -41,6 +41,11 @@ import {
   Users,
   RefreshCw,
   CreditCard,
+  ShieldCheck,
+  ShieldAlert,
+  Calendar,
+  FileText,
+  AlertTriangle,
 } from "lucide-react";
 import UserDetailsModal from "./UserDetailsModal";
 import CreateUserModal from "./CreateUserModal";
@@ -113,6 +118,50 @@ const UserVerificationPanel = () => {
     );
   };
 
+  // 🟢 DigiLocker helpers
+  // The backend stores the government document under its own fields
+  // (auth.model.js: digilocker*). digilockerPhoto is a data URI for the
+  // document image; the rest is the identity data DigiLocker returned.
+  const DOC_TYPE_LABELS: Record<string, string> = {
+    AADHAAR: "Aadhaar",
+    DRIVING_LICENCE: "Driving Licence",
+    VOTER_ID: "Voter ID",
+  };
+
+  const getDocTypeLabel = (docType?: string | null): string =>
+    (docType && DOC_TYPE_LABELS[docType]) || docType || "Document";
+
+  // DigiLocker returns DOB as bare DDMMYYYY ("22042003") despite the model
+  // comment saying DD-MM-YYYY, so records hold both forms. Render either
+  // readably and pass anything unrecognised through untouched.
+  const formatDigilockerDob = (dob?: string | null): string => {
+    if (!dob) return "—";
+    const digits = dob.replace(/\D/g, "");
+    if (digits.length === 8) {
+      return `${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4)}`;
+    }
+    return dob;
+  };
+
+  // Compare the name on the government document against the name on the
+  // account. Case, extra whitespace and punctuation differ routinely and are
+  // not a real mismatch; anything else is for the admin to look at.
+  const normalizeName = (name?: string | null): string =>
+    (name || "")
+      .toLowerCase()
+      .replace(/[^a-z\s]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const getNameMatch = (
+    user: any
+  ): "match" | "mismatch" | "unknown" => {
+    const documentName = normalizeName(user?.digilockerName);
+    const accountName = normalizeName(getUserDisplayName(user));
+    if (!documentName || !accountName) return "unknown";
+    return documentName === accountName ? "match" : "mismatch";
+  };
+
   // 🟢 Filter users from API
   useEffect(() => {
     let usersArray: any[] = [];
@@ -168,12 +217,18 @@ const UserVerificationPanel = () => {
 
   // 🟢 Fetch pre-signed URLs only for pending users (ADMIN token)
   const fetchUserImages = async (userId: string) => {
-    if (imageLoading[userId] || userImages[userId]) return;
+    // Only skip when we already resolved an image - a previous failure stored a
+    // null entry, and that must not block a later retry.
+    if (imageLoading[userId] || userImages[userId]?.uploaded) return;
 
     setImageLoading((prev) => ({ ...prev, [userId]: true }));
 
     try {
-      const targetUser = filteredUsers.find((u) => getUserId(u) === userId);
+      // Look up in the unfiltered list: pendingUsers ignores searchTerm and
+      // statusFilter, so filteredUsers may legitimately not contain this user.
+      const targetUser =
+        allUsers.find((u) => getUserId(u) === userId) ||
+        pendingUsers.find((u) => getUserId(u) === userId);
       if (!targetUser) throw new Error("User not found in state");
 
       if (targetUser.verificationStatus !== "pending") {
@@ -181,7 +236,8 @@ const UserVerificationPanel = () => {
           ...prev,
           [userId]: {
             uploaded: targetUser.uploadedPhoto || null,
-            aadhaar: targetUser.aadhaarPhoto || "/1.jpg",
+            aadhaar:
+              targetUser.digilockerPhoto || targetUser.aadhaarPhoto || null,
           },
         }));
         return;
@@ -189,14 +245,18 @@ const UserVerificationPanel = () => {
 
       console.log("🔄 Fetching pre-signed URLs (admin) for:", userId);
       const data = await CentralizedApi.get<{
-        images: boolean;
+        images?: Array<{ url?: string; signedUrl?: string }>;
         urls?: {
-          uploadedPhoto?: string;
-          aadhaarPhoto?: string;
+          uploadedPhoto?: string | null;
+          aadhaarPhoto?: string | null;
+          // DigiLocker writes the identity document to its own field
+          // (auth.model.js: digilockerPhoto). aadhaarPhoto is legacy.
+          digilockerPhoto?: string | null;
         };
         user?: {
           uploadedPhoto?: string;
           aadhaarPhoto?: string;
+          digilockerPhoto?: string;
         };
       }>(`/users/${encodeURIComponent(userId)}/presigned-urls?expires=3600`);
       console.log("✅ Signed URL response:", data);
@@ -205,10 +265,10 @@ const UserVerificationPanel = () => {
       let aadhaarUrl: string | null = null;
 
       // Extract from new images array format
-      if (data?.images && Array.isArray(data.images) && data.images.length > 0) {
-        uploadedUrl = data.images[0]?.url || null;
+      if (Array.isArray(data?.images) && data.images.length > 0) {
+        uploadedUrl = normalizeSignedUrl(data.images[0]);
         if (data.images.length > 1) {
-          aadhaarUrl = data.images[1]?.url || null;
+          aadhaarUrl = normalizeSignedUrl(data.images[1]);
         }
       }
 
@@ -219,28 +279,37 @@ const UserVerificationPanel = () => {
             ? data.urls.uploadedPhoto
             : null) || normalizeSignedUrl(data.urls) || uploadedUrl;
         aadhaarUrl =
+          (typeof data.urls.digilockerPhoto === "string"
+            ? data.urls.digilockerPhoto
+            : null) ||
           (typeof data.urls.aadhaarPhoto === "string"
             ? data.urls.aadhaarPhoto
-            : null) || aadhaarUrl;
+            : null) ||
+          aadhaarUrl;
       }
 
       if (data?.user) {
         uploadedUrl = uploadedUrl || data.user.uploadedPhoto;
-        aadhaarUrl = aadhaarUrl || data.user.aadhaarPhoto;
+        aadhaarUrl =
+          aadhaarUrl || data.user.digilockerPhoto || data.user.aadhaarPhoto;
       }
 
       setUserImages((prev) => ({
         ...prev,
         [userId]: {
           uploaded: uploadedUrl || targetUser.uploadedPhoto || null,
-          aadhaar: aadhaarUrl || targetUser.aadhaarPhoto || "/1.jpg",
+          aadhaar:
+            aadhaarUrl ||
+            targetUser.digilockerPhoto ||
+            targetUser.aadhaarPhoto ||
+            null,
         },
       }));
     } catch (error: any) {
       console.error("Error fetching pre-signed URLs:", error);
       setUserImages((prev) => ({
         ...prev,
-        [userId]: { uploaded: null, aadhaar: "/1.jpg" },
+        [userId]: { uploaded: null, aadhaar: null },
       }));
       toast({
         title: "Error Loading Images",
@@ -608,7 +677,11 @@ const UserVerificationPanel = () => {
                                   alt="User face"
                                   className="w-full h-20 object-cover"
                                   onError={(e) => {
-                                    e.currentTarget.src = '/placeholder-user.jpg';
+                                    // Guard against an onError loop when the
+                                    // fallback itself fails to load.
+                                    if (e.currentTarget.dataset.fallbackApplied) return;
+                                    e.currentTarget.dataset.fallbackApplied = 'true';
+                                    e.currentTarget.src = '/placeholder.svg';
                                     e.currentTarget.alt = 'Failed to load image';
                                   }}
                                 />
@@ -637,9 +710,11 @@ const UserVerificationPanel = () => {
                           </div>
                         </div>
 
-                        {/* Aadhaar Image (mock static or upload preview) */}
+                        {/* DigiLocker document image (digilockerPhoto) */}
                         <div className="space-y-2">
-                          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Aadhaar Photo</p>
+                          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+                            DigiLocker {getDocTypeLabel(user.digilockerDocType)}
+                          </p>
                           <div className={`relative border-4 rounded-lg overflow-hidden ${getOutlineColor(status)}`}>
                             {aadhaarPreviews[userId] ? (
                               <img
@@ -653,18 +728,119 @@ const UserVerificationPanel = () => {
                                 alt="Aadhaar"
                                 className="w-full h-20 object-cover"
                                 onError={(e) => {
-                                  e.currentTarget.src = '/1.jpg';
-                                  e.currentTarget.alt = 'Default Aadhaar image';
+                                  if (e.currentTarget.dataset.fallbackApplied) return;
+                                  e.currentTarget.dataset.fallbackApplied = 'true';
+                                  e.currentTarget.src = '/placeholder.svg';
+                                  e.currentTarget.alt = 'Failed to load document';
                                 }}
                               />
                             ) : (
                               <div className="w-full h-20 flex items-center justify-center bg-gray-100">
                                 <CreditCard className="h-5 w-5 text-gray-400" />
-                                <span className="text-xs text-gray-500 ml-1">No Aadhaar</span>
+                                <span className="text-xs text-gray-500 ml-1">No document</span>
                               </div>
                             )}
                           </div>
                         </div>
+                      </div>
+
+                      {/* DigiLocker verified identity data.
+                          These fields come straight from the user record
+                          (getAllUsers returns everything except password), so
+                          no extra request is needed. */}
+                      <div className="rounded-lg border bg-white p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+                            DigiLocker Data
+                          </p>
+                          {user.digilockerVerified ? (
+                            <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
+                              <ShieldCheck className="h-3 w-3 mr-1" />
+                              Verified
+                            </Badge>
+                          ) : (
+                            <Badge className="bg-gray-100 text-gray-700 hover:bg-gray-100">
+                              <ShieldAlert className="h-3 w-3 mr-1" />
+                              Not verified
+                            </Badge>
+                          )}
+                        </div>
+
+                        {user.digilockerVerified || user.digilockerName ? (
+                          <div className="space-y-1.5 text-sm">
+                            <div className="flex justify-between items-start gap-2">
+                              <span className="text-gray-500 flex items-center shrink-0">
+                                <User className="h-3 w-3 mr-1" />
+                                Name
+                              </span>
+                              <span className="text-right font-medium break-words">
+                                {user.digilockerName || "—"}
+                              </span>
+                            </div>
+
+                            {/* A name that differs from the account name is the
+                                thing an admin actually needs to catch here. */}
+                            {getNameMatch(user) === "mismatch" && (
+                              <div className="flex items-start gap-1 rounded bg-amber-50 border border-amber-200 p-2 text-xs text-amber-800">
+                                <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+                                <span>
+                                  Does not match account name "{getUserDisplayName(user)}"
+                                </span>
+                              </div>
+                            )}
+
+                            <div className="flex justify-between items-center gap-2">
+                              <span className="text-gray-500 flex items-center shrink-0">
+                                <Calendar className="h-3 w-3 mr-1" />
+                                DOB
+                              </span>
+                              <span className="text-right">
+                                {formatDigilockerDob(user.digilockerDob)}
+                              </span>
+                            </div>
+
+                            <div className="flex justify-between items-center gap-2">
+                              <span className="text-gray-500 shrink-0">Age</span>
+                              <span className="text-right flex items-center">
+                                {user.digilockerAge ?? "—"}
+                                {user.digilockerAge != null && (
+                                  user.digilockerAgeVerified ? (
+                                    <Badge className="ml-2 bg-green-100 text-green-800 hover:bg-green-100">
+                                      18+
+                                    </Badge>
+                                  ) : (
+                                    <Badge className="ml-2 bg-red-100 text-red-800 hover:bg-red-100">
+                                      Under 18
+                                    </Badge>
+                                  )
+                                )}
+                              </span>
+                            </div>
+
+                            <div className="flex justify-between items-center gap-2">
+                              <span className="text-gray-500 flex items-center shrink-0">
+                                <FileText className="h-3 w-3 mr-1" />
+                                Document
+                              </span>
+                              <span className="text-right">
+                                {getDocTypeLabel(user.digilockerDocType)}
+                              </span>
+                            </div>
+
+                            {user.digilockerVerifiedAt && (
+                              <div className="flex justify-between items-center gap-2">
+                                <span className="text-gray-500 shrink-0">Verified on</span>
+                                <span className="text-right">
+                                  {formatDate(user.digilockerVerifiedAt)}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-gray-500">
+                            This user has not completed DigiLocker verification.
+                          </p>
+                        )}
                       </div>
                     </div>
 

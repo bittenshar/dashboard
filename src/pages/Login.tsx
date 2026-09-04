@@ -107,19 +107,6 @@ const Login = () => {
                 {isLoading ? "Signing in..." : "Sign In"}
               </Button>
             </form>
-            
-            <div className="mt-6 space-y-3">
-              <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
-                <p className="text-sm text-blue-700 font-medium mb-1">Admin Access:</p>
-                <p className="text-xs text-blue-600">Email: admin@thrillathon.com</p>
-                <p className="text-xs text-blue-600">Password: admin123</p>
-              </div>
-              <div className="p-4 bg-green-50 rounded-lg border border-green-200">
-                <p className="text-sm text-green-700 font-medium mb-1">Employee Access:</p>
-                <p className="text-xs text-green-600">Email: employee1@thrillathon.com</p>
-                <p className="text-xs text-green-600">Password: employee123</p>
-              </div>
-            </div>
           </CardContent>
         </Card>
       </div>

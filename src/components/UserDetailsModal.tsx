@@ -164,9 +164,13 @@ const UserDetailsModal = ({ user, isOpen, onClose }: UserDetailsModalProps) => {
           throw new Error('Missing userId for signed URL request');
         }
 
+        // CentralizedApi.buildUrl() already prepends the /api prefix - passing
+        // it here too produced /api/api/users/... and always 404'd.
+        // Use the resolved uid: user.userId can be undefined when the record
+        // only carries _id.
         const resp = await CentralizedApi.call<SignedUrlResponse>(
           'GET',
-          `/api/users/${user.userId}/presigned-urls?expires=3600`
+          `/users/${encodeURIComponent(uid)}/presigned-urls?expires=3600`
         );
         
         // Extract URL from new images array format
@@ -534,10 +538,14 @@ const UserDetailsModal = ({ user, isOpen, onClose }: UserDetailsModalProps) => {
                                 <div className="w-full h-24 flex items-center justify-center text-xs text-muted-foreground">Loading image…</div>
                               ) : (
                                 <img
-                                  src={signedUrl || user?.uploadedPhoto || "/placeholder-user.jpg"}
+                                  src={signedUrl || user?.uploadedPhoto || "/placeholder.svg"}
                                   alt="User uploaded"
                                   className="w-full h-24 object-cover"
-                                  onError={(e) => { e.currentTarget.src = '/placeholder-user.jpg'; }}
+                                  onError={(e) => {
+                                    if (e.currentTarget.dataset.fallbackApplied) return;
+                                    e.currentTarget.dataset.fallbackApplied = 'true';
+                                    e.currentTarget.src = '/placeholder.svg';
+                                  }}
                                 />
                               )}
                             </div>

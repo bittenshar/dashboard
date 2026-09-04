@@ -49,31 +49,6 @@ interface Employee {
   role?: string;
 }
 
-type StaticCredential = User & { password: string };
-
-const STATIC_USERS: StaticCredential[] = [
-  {
-    id: 'admin-1',
-    name: 'Admin User',
-    email: 'admin@thrillathon.com',
-    role: 'Admin',
-    permissions: ['all'],
-    avatar: undefined,
-    password: 'admin123',
-  },
-  {
-    id: 'employee-1',
-    name: 'Employee One',
-    email: 'employee1@thrillathon.com',
-    role: 'Employee',
-    permissions: ['user_verification', 'events'],
-    avatar: undefined,
-    password: 'employee123',
-  }
-];
-
-const isStaticToken = (token: string) => token.startsWith('static-');
-
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const useAuth = () => {
@@ -109,13 +84,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         AuthManager.setUser(parsedUser);
         
         console.log('User restored from localStorage:', parsedUser.email);
-        
-        // Add validation check to verify token is still valid
-        if (isStaticToken(savedToken)) {
-          setIsLoading(false);
-          return;
-        }
 
+        // Add validation check to verify token is still valid
         validateToken(savedToken);
       } catch (error) {
         console.error('Error parsing saved user:', error);
@@ -127,15 +97,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
   
-  // Validate the token with the backend
+  // Validate the token with the backend.
+  // Only a 401/403 means the token is actually bad - a 404 (endpoint not
+  // deployed) or a network failure must not silently sign the user out.
   const validateToken = async (token: string) => {
     try {
       // Call a lightweight endpoint to verify token is valid using centralized API
       await CentralizedApi.auth.validateToken();
-      setIsLoading(false);
     } catch (error) {
-      console.error('Token validation failed:', error);
-      handleInvalidToken();
+      const status = (error as { status?: number })?.status;
+
+      if (status === 401 || status === 403) {
+        console.error('Token rejected by backend, signing out:', error);
+        handleInvalidToken();
+        return;
+      }
+
+      console.warn('Token validation unavailable, keeping existing session:', error);
+    } finally {
+      setIsLoading(false);
     }
   };
   
@@ -160,22 +140,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const login = async (email: string, password: string): Promise<boolean> => {
     setIsLoading(true);
-
-    const staticMatch = STATIC_USERS.find(
-      (staticUser) =>
-        staticUser.email.toLowerCase() === email.toLowerCase() &&
-        staticUser.password === password
-    );
-
-    if (staticMatch) {
-      const { password: _password, ...staticUserWithoutPassword } = staticMatch;
-      const staticUser = staticUserWithoutPassword as User;
-      const staticToken = `static-${staticMatch.id}`;
-
-      persistSession(staticUser, staticToken);
-      setIsLoading(false);
-      return true;
-    }
 
     try {
       // Call the real backend API using centralized API service

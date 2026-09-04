@@ -167,7 +167,9 @@ export const CentralizedApi = {
           method
         });
         
-        throw new Error(error.message || `HTTP ${response.status}`);
+        const apiError = new Error(error.message || `HTTP ${response.status}`) as Error & { status?: number };
+        apiError.status = response.status;
+        throw apiError;
       }
 
       // Step 7: Parse response
