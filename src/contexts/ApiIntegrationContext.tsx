@@ -12,7 +12,6 @@ const ApiIntegrationContext = createContext<ReturnType<typeof useApiIntegration>
 // Provider component
 interface ApiIntegrationProviderProps {
   children: ReactNode;
-  
 }
 
 export const ApiIntegrationProvider: React.FC<ApiIntegrationProviderProps> = ({ children }) => {
