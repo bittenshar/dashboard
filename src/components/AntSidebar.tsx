@@ -9,6 +9,7 @@ import {
   BulbOutlined,
   PlusOutlined,
   NotificationOutlined,
+  ScanOutlined,
 } from "@ant-design/icons";
 import { Button, Menu, Switch } from "antd";
 import type { MenuProps } from "antd";
@@ -20,6 +21,7 @@ type MenuItem = Required<MenuProps>["items"][number];
 const items: MenuItem[] = [
   { key: "/", icon: <PieChartOutlined />, label: "Dashboard" },
   { key: "/users", icon: <DesktopOutlined />, label: "User Verification" },
+  { key: "/face-check", icon: <ScanOutlined />, label: "Face ID Check" },
   { key: "/events", icon: <ContainerOutlined />, label: "Event Management" },
   { key: "/feedback", icon: <AppstoreOutlined />, label: "User Feedback" },
   { key: "/admin", icon: <AppstoreOutlined />, label: "Admin" },

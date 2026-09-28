@@ -488,7 +488,12 @@ const UserVerificationPanel = () => {
   const isFaceGenerated = (user: any): boolean => {
     // Return early if no user data
     if (!user) return false;
-    
+
+    // A selfie held for review (face-pending/) is an S3 photo but not a face
+    // yet — the face ID is only made when this user is verified. A removed or
+    // rejected one isn't a face either.
+    if (['pending_review', 'rejected', 'removed'].includes(user.faceStatus)) return false;
+
     // Check all possible field variations
     const possibleFields = ['faceId', 'faceID', 'face_id', 'rekognitionId', 'rekognition_id'];
     

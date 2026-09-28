@@ -18,6 +18,7 @@ import PermissionGuard from "./PermissionGuard";
 import UserFeedbackSystem from "./UserFeedbackSystem";
 import AdminPanel from "./AdminPanel";
 import AdsManagement from "./AdsManagement";
+import FaceIdCheck from "./FaceIdCheck";
 
 const MainContent = () => {
   const api = useApiContext();
@@ -203,6 +204,11 @@ const MainContent = () => {
           <Route path="/users" element={
             <PermissionGuard requiredPermission="users">
               <UserVerificationPanelRedesigned />
+            </PermissionGuard>
+          } />
+          <Route path="/face-check" element={
+            <PermissionGuard requiredPermission="admin">
+              <FaceIdCheck />
             </PermissionGuard>
           } />
           <Route path="/events" element={

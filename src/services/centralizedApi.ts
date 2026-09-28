@@ -304,6 +304,44 @@ export const CentralizedApi = {
   },
 
   // ===================================================================
+  // FACE ID CHECK (admin)
+  // ===================================================================
+
+  faceReview: {
+    /** Face state for a user (Mongo _id): review status and AWS face records. */
+    getUser(id: string) {
+      return CentralizedApi.get(`/admin/face-review/users/${encodeURIComponent(id)}`);
+    },
+
+    /**
+     * Which registered user a photo matches. Search only — the backend never
+     * stores the photo. Sent as multipart, which call() can't do: it always
+     * JSON-encodes the body.
+     */
+    async search(image: File, expectedUserId?: string) {
+      const form = new FormData();
+      form.append('image', image);
+      if (expectedUserId) form.append('userId', expectedUserId);
+
+      // Let the browser set the multipart Content-Type (with its boundary).
+      const { 'Content-Type': _json, ...headers } = CentralizedApi.getAuthHeaders();
+      const response = await fetch(CentralizedApi.buildUrl('/admin/face-review/search'), {
+        method: 'POST',
+        headers,
+        body: form,
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
+      return result;
+    },
+
+    /** Delete the user's face ID from AWS so they can enrol again. */
+    removeFace(id: string, reason?: string) {
+      return CentralizedApi.call('DELETE', `/admin/face-review/users/${encodeURIComponent(id)}/face`, { reason });
+    },
+  },
+
+  // ===================================================================
   // EVENT ENDPOINTS
   // ===================================================================
 
