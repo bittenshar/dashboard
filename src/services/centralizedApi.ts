@@ -39,8 +39,9 @@ export const CentralizedApi = {
 
   /**
    * Build URL for API call
-   * - Always uses relative paths for Vite proxy in dev
+   * - Uses relative paths for Vite proxy in dev
    * - Vite proxy configured to forward /api/* to http://localhost:3000
+   * - Production builds have no proxy, so they call BASE_URL directly
    */
   buildUrl(endpoint: string): string {
     const relativeUrl = `${API_PREFIX}${endpoint}`;
@@ -57,7 +58,7 @@ export const CentralizedApi = {
     console.log(`  └─ Environment: ${typeof window !== 'undefined' ? window.location.hostname : 'Node'}`);
     console.groupEnd();
     
-    return relativeUrl;
+    return IS_DEV ? relativeUrl : `${BASE_URL}${relativeUrl}`;
   },
 
   /**

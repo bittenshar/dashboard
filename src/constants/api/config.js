@@ -1,10 +1,10 @@
 // API Configuration - Single source of truth
 // Change these values once to affect entire application
 
-// Resolve API base URL from Vite env in dev; default to localhost
+// Resolve API base URL from Vite env (.env.production sets the deployed API); default to localhost
 
 export const API_CONFIG = {
-  BASE_URL: 'http://localhost:3000', // Local development backend.   kannu
+  BASE_URL: import.meta.env?.VITE_API_BASE_URL || 'http://localhost:3000',
   VERSION: '',
   TIMEOUT: 10000,
   HEADERS: {
