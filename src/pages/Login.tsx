@@ -17,6 +17,7 @@ import { useToast } from '@/hooks/use-toast';
 // Matches the backend's wait between code emails.
 const RESEND_COOLDOWN_SECONDS = 30;
 
+
 const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
