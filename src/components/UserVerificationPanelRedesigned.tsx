@@ -6,6 +6,10 @@
  */
 
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { ScanFace } from "lucide-react";
+import { verificationState } from "@/lib/verification";
+import { useFaceOwners } from "@/hooks/useFaceOwners";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import CentralizedApi from "@/services/centralizedApi";
@@ -40,12 +44,6 @@ import {
   List,
   Users,
   RefreshCw,
-  CreditCard,
-  ShieldCheck,
-  ShieldAlert,
-  Calendar,
-  FileText,
-  AlertTriangle,
 } from "lucide-react";
 import UserDetailsModal from "./UserDetailsModal";
 import CreateUserModal from "./CreateUserModal";
@@ -91,76 +89,14 @@ const UserVerificationPanel = () => {
   const [filteredUsers, setFilteredUsers] = useState<any[]>([]);
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [pendingUsers, setPendingUsers] = useState<any[]>([]);
+  const navigate = useNavigate();
+  const { hasFaceId } = useFaceOwners();
   const [actionLoading, setActionLoading] = useState<{ [key: string]: boolean }>(
-    {}
-  );
-  const [userImages, setUserImages] = useState<{
-    [key: string]: { uploaded: string | null; aadhaar: string | null };
-  }>({});
-  const [imageLoading, setImageLoading] = useState<{ [key: string]: boolean }>(
     {}
   );
   const [aadhaarPreviews, setAadhaarPreviews] = useState<{
     [key: string]: string | null;
   }>({});
-
-  // 🟢 Normalize signed URL keys
-  const normalizeSignedUrl = (obj: any): string | null => {
-    if (!obj || typeof obj !== "object") return null;
-    return (
-      obj.signedUrl ||
-      obj.signedurl ||
-      obj.uploadedPhoto ||
-      obj.url ||
-      obj.SignedUrl ||
-      obj.SignedURL ||
-      null
-    );
-  };
-
-  // 🟢 DigiLocker helpers
-  // The backend stores the government document under its own fields
-  // (auth.model.js: digilocker*). digilockerPhoto is a data URI for the
-  // document image; the rest is the identity data DigiLocker returned.
-  const DOC_TYPE_LABELS: Record<string, string> = {
-    AADHAAR: "Aadhaar",
-    DRIVING_LICENCE: "Driving Licence",
-    VOTER_ID: "Voter ID",
-  };
-
-  const getDocTypeLabel = (docType?: string | null): string =>
-    (docType && DOC_TYPE_LABELS[docType]) || docType || "Document";
-
-  // DigiLocker returns DOB as bare DDMMYYYY ("22042003") despite the model
-  // comment saying DD-MM-YYYY, so records hold both forms. Render either
-  // readably and pass anything unrecognised through untouched.
-  const formatDigilockerDob = (dob?: string | null): string => {
-    if (!dob) return "—";
-    const digits = dob.replace(/\D/g, "");
-    if (digits.length === 8) {
-      return `${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4)}`;
-    }
-    return dob;
-  };
-
-  // Compare the name on the government document against the name on the
-  // account. Case, extra whitespace and punctuation differ routinely and are
-  // not a real mismatch; anything else is for the admin to look at.
-  const normalizeName = (name?: string | null): string =>
-    (name || "")
-      .toLowerCase()
-      .replace(/[^a-z\s]/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-
-  const getNameMatch = (
-    user: any
-  ): "match" | "mismatch" | "unknown" => {
-    const documentName = normalizeName(user?.digilockerName);
-    const accountName = normalizeName(getUserDisplayName(user));
-    if (!documentName || !accountName) return "unknown";
-    return documentName === accountName ? "match" : "mismatch";
-  };
 
   // 🟢 Filter users from API
   useEffect(() => {
@@ -183,9 +119,8 @@ const UserVerificationPanel = () => {
     setAllUsers(usersArray);
 
     let filtered = [...usersArray];
-    let pending = filtered.filter(
-      (user) => user.verificationStatus === "pending"
-    );
+    // Cards are for the admin's actual queue: pending with a selfie to review.
+    let pending = filtered.filter((user) => verificationState(user) === "to_verify");
 
     if (searchTerm) {
       filtered = filtered.filter((user) => {
@@ -214,122 +149,6 @@ const UserVerificationPanel = () => {
   }, [api.users, searchTerm, statusFilter]);
 
   const getUserId = (user: any): string => user.userId || user._id || "";
-
-  // 🟢 Fetch pre-signed URLs only for pending users (ADMIN token)
-  const fetchUserImages = async (userId: string) => {
-    // Only skip when we already resolved an image - a previous failure stored a
-    // null entry, and that must not block a later retry.
-    if (imageLoading[userId] || userImages[userId]?.uploaded) return;
-
-    setImageLoading((prev) => ({ ...prev, [userId]: true }));
-
-    try {
-      // Look up in the unfiltered list: pendingUsers ignores searchTerm and
-      // statusFilter, so filteredUsers may legitimately not contain this user.
-      const targetUser =
-        allUsers.find((u) => getUserId(u) === userId) ||
-        pendingUsers.find((u) => getUserId(u) === userId);
-      if (!targetUser) throw new Error("User not found in state");
-
-      if (targetUser.verificationStatus !== "pending") {
-        setUserImages((prev) => ({
-          ...prev,
-          [userId]: {
-            uploaded: targetUser.uploadedPhoto || null,
-            aadhaar:
-              targetUser.digilockerPhoto || targetUser.aadhaarPhoto || null,
-          },
-        }));
-        return;
-      }
-
-      console.log("🔄 Fetching pre-signed URLs (admin) for:", userId);
-      const data = await CentralizedApi.get<{
-        images?: Array<{ url?: string; signedUrl?: string }>;
-        urls?: {
-          uploadedPhoto?: string | null;
-          aadhaarPhoto?: string | null;
-          // DigiLocker writes the identity document to its own field
-          // (auth.model.js: digilockerPhoto). aadhaarPhoto is legacy.
-          digilockerPhoto?: string | null;
-        };
-        user?: {
-          uploadedPhoto?: string;
-          aadhaarPhoto?: string;
-          digilockerPhoto?: string;
-        };
-      }>(`/users/${encodeURIComponent(userId)}/presigned-urls?expires=3600`);
-      console.log("✅ Signed URL response:", data);
-
-      let uploadedUrl: string | null = null;
-      let aadhaarUrl: string | null = null;
-
-      // Extract from new images array format
-      if (Array.isArray(data?.images) && data.images.length > 0) {
-        uploadedUrl = normalizeSignedUrl(data.images[0]);
-        if (data.images.length > 1) {
-          aadhaarUrl = normalizeSignedUrl(data.images[1]);
-        }
-      }
-
-      // Fallback to old format if new format not available
-      if (data?.urls) {
-        uploadedUrl =
-          (typeof data.urls.uploadedPhoto === "string"
-            ? data.urls.uploadedPhoto
-            : null) || normalizeSignedUrl(data.urls) || uploadedUrl;
-        aadhaarUrl =
-          (typeof data.urls.digilockerPhoto === "string"
-            ? data.urls.digilockerPhoto
-            : null) ||
-          (typeof data.urls.aadhaarPhoto === "string"
-            ? data.urls.aadhaarPhoto
-            : null) ||
-          aadhaarUrl;
-      }
-
-      if (data?.user) {
-        uploadedUrl = uploadedUrl || data.user.uploadedPhoto;
-        aadhaarUrl =
-          aadhaarUrl || data.user.digilockerPhoto || data.user.aadhaarPhoto;
-      }
-
-      setUserImages((prev) => ({
-        ...prev,
-        [userId]: {
-          uploaded: uploadedUrl || targetUser.uploadedPhoto || null,
-          aadhaar:
-            aadhaarUrl ||
-            targetUser.digilockerPhoto ||
-            targetUser.aadhaarPhoto ||
-            null,
-        },
-      }));
-    } catch (error: any) {
-      console.error("Error fetching pre-signed URLs:", error);
-      setUserImages((prev) => ({
-        ...prev,
-        [userId]: { uploaded: null, aadhaar: null },
-      }));
-      toast({
-        title: "Error Loading Images",
-        description: error.message || "Failed to load user images",
-        variant: "destructive",
-      });
-    } finally {
-      setImageLoading((prev) => ({ ...prev, [userId]: false }));
-    }
-  };
-
-  // 🟢 Load images for pending users only
-  useEffect(() => {
-    pendingUsers.forEach((user: any) => {
-      const userId = getUserId(user);
-      if (userId && !userImages[userId] && !imageLoading[userId]) {
-        fetchUserImages(userId);
-      }
-    });
-  }, [pendingUsers]);
 
   const handleVerifyUser = async (userId: string) => {
     setActionLoading((prev) => ({ ...prev, [userId]: true }));
@@ -484,74 +303,9 @@ const UserVerificationPanel = () => {
     return new Date(date).toLocaleDateString();
   };
 
-  // 🟢 Comprehensive function to check if face ID is generated
-  const isFaceGenerated = (user: any): boolean => {
-    // Return early if no user data
-    if (!user) return false;
-
-    // A selfie held for review (face-pending/) is an S3 photo but not a face
-    // yet — the face ID is only made when this user is verified. A removed or
-    // rejected one isn't a face either.
-    if (['pending_review', 'rejected', 'removed'].includes(user.faceStatus)) return false;
-
-    // Check all possible field variations
-    const possibleFields = ['faceId', 'faceID', 'face_id', 'rekognitionId', 'rekognition_id'];
-    
-    // First, try direct boolean access for each field
-    for (const field of possibleFields) {
-      if (user[field] === true) {
-        console.log(`✅ Found true boolean value in ${field}`);
-        return true;
-      }
-    }
-    
-    // Then check for truthiness with type conversion for each field
-    for (const field of possibleFields) {
-      const value = user[field];
-      
-      // Skip null/undefined
-      if (value == null) continue;
-      
-      // Handle boolean values
-      if (typeof value === "boolean") return value;
-      
-      // Handle numeric values (1 = true)
-      if (typeof value === "number") return value === 1;
-      
-      // Handle string values
-      if (typeof value === "string") {
-        const s = value.trim().toLowerCase();
-        if (s === "true" || s === "1" || s === "yes") return true;
-      }
-      
-      // Handle object values (non-empty = true)
-      if (typeof value === 'object' && value !== null) {
-        if (Object.keys(value).length > 0) return true;
-      }
-    }
-    
-    // If user has an uploaded photo that looks like an S3 URL, assume face ID is generated
-    if (user.uploadedPhoto && 
-        typeof user.uploadedPhoto === 'string' && 
-        (user.uploadedPhoto.includes('amazonaws.com') || 
-         user.uploadedPhoto.includes('s3.') || 
-         user.uploadedPhoto.includes('nfacialimagescollections'))) {
-      console.log('✅ Detected valid uploaded photo URL, assuming Face ID exists');
-      return true;
-    }
-    
-    // Debug logging
-    console.log('⚠️ Face ID detection - all checks failed:', {
-      userId: getUserId(user),
-      faceIdValue: user?.faceId, 
-      faceIdType: typeof user?.faceId,
-      hasUploadedPhoto: !!user?.uploadedPhoto,
-      userKeys: Object.keys(user)
-    });
-    
-    // Default to false if all checks fail
-    return false;
-  };
+  // Whether the user really has a face in the face system (not whether a
+  // photo is on file). False until the shared list has loaded.
+  const isFaceGenerated = (user: any): boolean => hasFaceId(user) === true;
 
   const getLastLoginText = (user: any): string => {
     if (user?.lastLoginFormatted) return user.lastLoginFormatted;
@@ -603,7 +357,7 @@ const UserVerificationPanel = () => {
             {allUsers.filter((u) => u.verificationStatus === "verified").length}
           </Badge>
           <Badge variant="secondary" className="bg-yellow-100 text-yellow-800 px-3 py-1">
-            Pending: {pendingUsers.length || 0}
+            To verify: {pendingUsers.length || 0}
           </Badge>
           <Badge variant="destructive" className="px-3 py-1">
             Rejected:{" "}
@@ -627,7 +381,7 @@ const UserVerificationPanel = () => {
         <div className="space-y-4">
           <div className="flex items-center space-x-2">
             <Clock className="h-5 w-5 text-yellow-600" />
-            <h2 className="text-2xl font-bold text-yellow-600">Pending Verifications</h2>
+            <h2 className="text-2xl font-bold text-yellow-600">Waiting for Verification</h2>
             <Badge className="bg-yellow-100 text-yellow-800">{pendingUsers.length}</Badge>
           </div>
           
@@ -662,193 +416,6 @@ const UserVerificationPanel = () => {
                       </Badge>
                     </div>
 
-                    {/* Photo Verification */}
-                    <div className="space-y-3 mb-4">
-                      <h4 className="font-medium text-gray-900">Photo Verification</h4>
-                      <div className="grid grid-cols-2 gap-4">
-                        
-                        {/* User Image (from S3 signed URL) */}
-                        <div className="space-y-2">
-                          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Uploaded Photo</p>
-                          <div className={`relative border-4 rounded-lg overflow-hidden ${getOutlineColor(status)}`}>
-                            {imageLoading[userId] ? (
-                              <div className="w-full h-20 flex items-center justify-center bg-gray-100">
-                                <RefreshCw className="h-5 w-5 animate-spin text-gray-400" />
-                              </div>
-                            ) : userImages[userId]?.uploaded ? (
-                              <>
-                                <img
-                                  src={userImages[userId]?.uploaded!}
-                                  alt="User face"
-                                  className="w-full h-20 object-cover"
-                                  onError={(e) => {
-                                    // Guard against an onError loop when the
-                                    // fallback itself fails to load.
-                                    if (e.currentTarget.dataset.fallbackApplied) return;
-                                    e.currentTarget.dataset.fallbackApplied = 'true';
-                                    e.currentTarget.src = '/placeholder.svg';
-                                    e.currentTarget.alt = 'Failed to load image';
-                                  }}
-                                />
-                                {status === "verified" && (
-                                  <div className="absolute top-1 right-1 bg-green-500 rounded-full p-1">
-                                    <CheckCircle className="h-3 w-3 text-white" />
-                                  </div>
-                                )}
-                                {status === "rejected" && (
-                                  <div className="absolute top-1 right-1 bg-red-500 rounded-full p-1">
-                                    <XCircle className="h-3 w-3 text-white" />
-                                  </div>
-                                )}
-                                {status === "pending" && (
-                                  <div className="absolute top-1 right-1 bg-yellow-500 rounded-full p-1">
-                                    <Clock className="h-3 w-3 text-white" />
-                                  </div>
-                                )}
-                              </>
-                            ) : (
-                              <div className="w-full h-20 flex items-center justify-center bg-gray-100">
-                                <User className="h-5 w-5 text-gray-400" />
-                                <span className="text-xs text-gray-500 ml-1">No image</span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* DigiLocker document image (digilockerPhoto) */}
-                        <div className="space-y-2">
-                          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                            DigiLocker {getDocTypeLabel(user.digilockerDocType)}
-                          </p>
-                          <div className={`relative border-4 rounded-lg overflow-hidden ${getOutlineColor(status)}`}>
-                            {aadhaarPreviews[userId] ? (
-                              <img
-                                src={aadhaarPreviews[userId]!}
-                                alt="Aadhaar"
-                                className="w-full h-20 object-cover"
-                              />
-                            ) : userImages[userId]?.aadhaar ? (
-                              <img
-                                src={userImages[userId]?.aadhaar}
-                                alt="Aadhaar"
-                                className="w-full h-20 object-cover"
-                                onError={(e) => {
-                                  if (e.currentTarget.dataset.fallbackApplied) return;
-                                  e.currentTarget.dataset.fallbackApplied = 'true';
-                                  e.currentTarget.src = '/placeholder.svg';
-                                  e.currentTarget.alt = 'Failed to load document';
-                                }}
-                              />
-                            ) : (
-                              <div className="w-full h-20 flex items-center justify-center bg-gray-100">
-                                <CreditCard className="h-5 w-5 text-gray-400" />
-                                <span className="text-xs text-gray-500 ml-1">No document</span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* DigiLocker verified identity data.
-                          These fields come straight from the user record
-                          (getAllUsers returns everything except password), so
-                          no extra request is needed. */}
-                      <div className="rounded-lg border bg-white p-3 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                            DigiLocker Data
-                          </p>
-                          {user.digilockerVerified ? (
-                            <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
-                              <ShieldCheck className="h-3 w-3 mr-1" />
-                              Verified
-                            </Badge>
-                          ) : (
-                            <Badge className="bg-gray-100 text-gray-700 hover:bg-gray-100">
-                              <ShieldAlert className="h-3 w-3 mr-1" />
-                              Not verified
-                            </Badge>
-                          )}
-                        </div>
-
-                        {user.digilockerVerified || user.digilockerName ? (
-                          <div className="space-y-1.5 text-sm">
-                            <div className="flex justify-between items-start gap-2">
-                              <span className="text-gray-500 flex items-center shrink-0">
-                                <User className="h-3 w-3 mr-1" />
-                                Name
-                              </span>
-                              <span className="text-right font-medium break-words">
-                                {user.digilockerName || "—"}
-                              </span>
-                            </div>
-
-                            {/* A name that differs from the account name is the
-                                thing an admin actually needs to catch here. */}
-                            {getNameMatch(user) === "mismatch" && (
-                              <div className="flex items-start gap-1 rounded bg-amber-50 border border-amber-200 p-2 text-xs text-amber-800">
-                                <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
-                                <span>
-                                  Does not match account name "{getUserDisplayName(user)}"
-                                </span>
-                              </div>
-                            )}
-
-                            <div className="flex justify-between items-center gap-2">
-                              <span className="text-gray-500 flex items-center shrink-0">
-                                <Calendar className="h-3 w-3 mr-1" />
-                                DOB
-                              </span>
-                              <span className="text-right">
-                                {formatDigilockerDob(user.digilockerDob)}
-                              </span>
-                            </div>
-
-                            <div className="flex justify-between items-center gap-2">
-                              <span className="text-gray-500 shrink-0">Age</span>
-                              <span className="text-right flex items-center">
-                                {user.digilockerAge ?? "—"}
-                                {user.digilockerAge != null && (
-                                  user.digilockerAgeVerified ? (
-                                    <Badge className="ml-2 bg-green-100 text-green-800 hover:bg-green-100">
-                                      18+
-                                    </Badge>
-                                  ) : (
-                                    <Badge className="ml-2 bg-red-100 text-red-800 hover:bg-red-100">
-                                      Under 18
-                                    </Badge>
-                                  )
-                                )}
-                              </span>
-                            </div>
-
-                            <div className="flex justify-between items-center gap-2">
-                              <span className="text-gray-500 flex items-center shrink-0">
-                                <FileText className="h-3 w-3 mr-1" />
-                                Document
-                              </span>
-                              <span className="text-right">
-                                {getDocTypeLabel(user.digilockerDocType)}
-                              </span>
-                            </div>
-
-                            {user.digilockerVerifiedAt && (
-                              <div className="flex justify-between items-center gap-2">
-                                <span className="text-gray-500 shrink-0">Verified on</span>
-                                <span className="text-right">
-                                  {formatDate(user.digilockerVerifiedAt)}
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <p className="text-sm text-gray-500">
-                            This user has not completed DigiLocker verification.
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
                     {/* User Info */}
                     <div className="space-y-2 text-sm mb-4">
                       <div className="flex justify-between">
@@ -862,13 +429,13 @@ const UserVerificationPanel = () => {
                       <div className="flex justify-between">
                         <span className="text-gray-500">Face ID:</span>
                         <span className="flex items-center">
-                          {isFaceGenerated(user) ? (
-                            <><CheckCircle className="h-3 w-3 text-green-500 mr-1" /> Generated</>
+                          {hasFaceId(user) === null ? (
+                            <span className="text-gray-400">Checking…</span>
+                          ) : hasFaceId(user) ? (
+                            <><CheckCircle className="h-3 w-3 text-green-500 mr-1" /> Active</>
                           ) : (
-                            <><XCircle className="h-3 w-3 text-red-500 mr-1" /> Not Generated</>
+                            <><XCircle className="h-3 w-3 text-red-500 mr-1" /> None</>
                           )}
-                          {/* Debug display of raw value: */}
-                          <span className="text-xs text-gray-400 ml-1">({String(user.faceId)})</span>
                         </span>
                       </div>
                       <div className="flex justify-between">
@@ -888,23 +455,13 @@ const UserVerificationPanel = () => {
                         <Eye className="h-4 w-4 mr-1" />
                         View
                       </Button>
-                      <Button 
-                        size="sm" 
-                        className="gradient-success text-white border-none hover-glow"
-                        onClick={() => handleVerifyUser(userId)}
-                        disabled={actionLoading[userId]}
-                      >
-                        <CheckCircle className="h-4 w-4 mr-1" />
-                        {actionLoading[userId] ? 'Approving...' : 'Approve'}
-                      </Button>
-                      <Button 
-                        variant="destructive" 
+                      <Button
                         size="sm"
-                        onClick={() => handleRejectUser(userId)}
-                        disabled={actionLoading[userId]}
+                        className="flex-1 gradient-success text-white border-none hover-glow"
+                        onClick={() => navigate(`/face-check?user=${encodeURIComponent(user._id || user.id || userId)}`)}
                       >
-                        <XCircle className="h-4 w-4 mr-1" />
-                        {actionLoading[userId] ? 'Rejecting...' : 'Reject'}
+                        <ScanFace className="h-4 w-4 mr-1" />
+                        Review in Face ID Check
                       </Button>
                     </div>
                   </CardContent>

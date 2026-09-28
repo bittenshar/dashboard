@@ -9,6 +9,8 @@ import CentralizedApi from "@/services/centralizedApi";
 import { Input } from "@/components/ui/input";
 import { useApiContext } from "@/contexts/ApiIntegrationContext";
 import { useToast } from "@/hooks/use-toast";
+import AdminBookTicketDialog from "./AdminBookTicketDialog";
+import { useFaceOwners } from "@/hooks/useFaceOwners";
 import { 
   User, 
   CreditCard, 
@@ -34,14 +36,18 @@ interface UserDetailsModalProps {
 
 const UserDetailsModal = ({ user, isOpen, onClose }: UserDetailsModalProps) => {
   const [activeTab, setActiveTab] = useState("profile");
+  const { hasFaceId } = useFaceOwners();
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
   const [signedUrlLoading, setSignedUrlLoading] = useState(false);
   const [signedUrlError, setSignedUrlError] = useState<string | null>(null);
   const [hasUserData, setHasUserData] = useState<boolean>(false);
-  const [userRegistrations, setUserRegistrations] = useState<any[]>([]);
-  const [registrationsLoading, setRegistrationsLoading] = useState(false);
-  const [userTickets, setUserTickets] = useState<any[]>([]);
+  const [bookings, setBookings] = useState<any[]>([]);
   const [ticketsLoading, setTicketsLoading] = useState(false);
+  const [ticketsError, setTicketsError] = useState<string | null>(null);
+  const [bookOpen, setBookOpen] = useState(false);
+  const [resending, setResending] = useState<string | null>(null);
+  // Bumped after an admin booking so the list reloads.
+  const [ticketsReload, setTicketsReload] = useState(0);
   const api = useApiContext();
   const { toast } = useToast();
   const currentUser = api.getCurrentUser?.();
@@ -87,40 +93,9 @@ const UserDetailsModal = ({ user, isOpen, onClose }: UserDetailsModalProps) => {
     }
   }, [isOpen, hasUserData, onClose]);
   
-  // Enhanced function to handle API inconsistency and ensure correct display
-  const isFaceGenerated = (): boolean => {
-    // Safety check for missing user data
-    if (!user) {
-      console.warn('⚠️ Attempting to check faceId for null user');
-      return false;
-    }
-    
-    // Check for direct boolean values first (most reliable)
-    if (user.faceId === true) return true;
-    
-    // Check all possible field variations with different naming conventions
-    const possibleFields = ['faceId', 'faceID', 'face_id', 'rekognitionId', 'rekognition_id', 'faceid'];
-    for (const field of possibleFields) {
-      // Exact boolean match
-      if (user[field] === true) return true;
-      
-      // Type conversion for non-boolean truthy values
-      const val = user[field];
-      if (val && typeof val === 'number' && val === 1) return true;
-      if (val && typeof val === 'string' && 
-          ['true', '1', 'yes', 't'].includes(val.trim().toLowerCase())) return true;
-    }
-    
-    // Check for presence of uploaded photos which implies face ID exists
-    if (user.uploadedPhoto && typeof user.uploadedPhoto === 'string' && 
-        (user.uploadedPhoto.includes('amazonaws.com') || 
-         user.uploadedPhoto.includes('s3.') || 
-         user.uploadedPhoto.includes('nfacialimagescollections'))) {
-      return true;
-    }
-    
-    return false;
-  };
+  // Whether the user really has a face in the face system — a photo on file
+  // doesn't mean a face was made from it.
+  const isFaceGenerated = (): boolean => hasFaceId(user) === true;
 
   // Prefer backend-provided formatted text if available
   const getLastSeenText = (): string => {
@@ -207,55 +182,35 @@ const UserDetailsModal = ({ user, isOpen, onClose }: UserDetailsModalProps) => {
     };
   }, [isOpen]);
 
-  // Fetch user registrations from backend
+  // Tickets are bookings: GET /api/booking/user/:id, keyed by the user's Mongo
+  // _id. It also returns bookings where they're a guest on someone else's.
   useEffect(() => {
     let cancelled = false;
-    const fetchUserRegistrations = async () => {
-      if (!isOpen || !user) return;
-      
-      setRegistrationsLoading(true);
+    const fetchBookings = async () => {
+      const id = user?._id || user?.id;
+      if (!isOpen || !id) return;
+
+      setTicketsLoading(true);
+      setTicketsError(null);
       try {
-        const userId = user?.userId || user?._id || user?.id;
-        if (!userId) {
-          console.warn('No userId available for fetching registrations');
-          return;
-        }
-
-        console.log('📋 Fetching registrations for userId:', userId);
-        const response = await CentralizedApi.registrations.getByUserId(userId);
-        
-        if (!cancelled) {
-          // Handle different response structures
-          let registrationsArray: any[] = [];
-          
-          if (Array.isArray(response)) {
-            registrationsArray = response;
-          } else if ((response as any).registrations && Array.isArray((response as any).registrations)) {
-            registrationsArray = (response as any).registrations;
-          } else if ((response as any).data && Array.isArray((response as any).data)) {
-            registrationsArray = (response as any).data;
-          } else if ((response as any).data && (response as any).data.registrations) {
-            registrationsArray = (response as any).data.registrations;
-          }
-
-          console.log('📋 Registrations fetched:', registrationsArray);
-          setUserRegistrations(registrationsArray);
-        }
+        const response: any = await CentralizedApi.tickets.getByUserId(id);
+        if (!cancelled) setBookings(response?.data?.bookings || []);
       } catch (error) {
-        console.error('Failed to fetch registrations:', error);
+        console.error('Failed to fetch bookings:', error);
         if (!cancelled) {
-          setUserRegistrations([]);
+          setBookings([]);
+          setTicketsError(error instanceof Error ? error.message : 'Could not load tickets');
         }
       } finally {
-        if (!cancelled) setRegistrationsLoading(false);
+        if (!cancelled) setTicketsLoading(false);
       }
     };
 
-    fetchUserRegistrations();
+    fetchBookings();
     return () => {
       cancelled = true;
     };
-  }, [isOpen, user]);
+  }, [isOpen, user, ticketsReload]);
 
   // Early return if user is null or undefined - keep after hooks to preserve consistent hook order
   if (!user) {
@@ -301,55 +256,6 @@ const UserDetailsModal = ({ user, isOpen, onClose }: UserDetailsModalProps) => {
     }
   };
 
-  // Fetch user tickets from backend
-  useEffect(() => {
-    let cancelled = false;
-    const fetchUserTickets = async () => {
-      if (!isOpen || !user) return;
-      
-      setTicketsLoading(true);
-      try {
-        const userId = user?.userId || user?._id || user?.id;
-        if (!userId) {
-          console.warn('No userId available for fetching tickets');
-          return;
-        }
-
-        console.log('🎫 Fetching tickets for userId:', userId);
-        const response = await CentralizedApi.tickets.getByUserId(userId);
-        
-        if (!cancelled) {
-          let ticketsArray: any[] = [];
-          
-          if (Array.isArray(response)) {
-            ticketsArray = response;
-          } else if ((response as any).tickets && Array.isArray((response as any).tickets)) {
-            ticketsArray = (response as any).tickets;
-          } else if ((response as any).data && Array.isArray((response as any).data)) {
-            ticketsArray = (response as any).data;
-          } else if ((response as any).data && (response as any).data.tickets) {
-            ticketsArray = (response as any).data.tickets;
-          }
-
-          console.log('🎫 Tickets fetched:', ticketsArray);
-          setUserTickets(ticketsArray);
-        }
-      } catch (error) {
-        console.error('Failed to fetch tickets:', error);
-        if (!cancelled) {
-          setUserTickets([]);
-        }
-      } finally {
-        if (!cancelled) setTicketsLoading(false);
-      }
-    };
-
-    fetchUserTickets();
-    return () => {
-      cancelled = true;
-    };
-  }, [isOpen, user]);
-
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "active":
@@ -371,9 +277,73 @@ const UserDetailsModal = ({ user, isOpen, onClose }: UserDetailsModalProps) => {
     }
   };
 
-  const totalSpent = userTickets
-    .filter(ticket => ticket.status !== "cancelled")
-    .reduce((sum, ticket) => sum + ticket.price, 0);
+  // Only bookings that were paid for and not undone count as tickets.
+  const heldBookings = bookings.filter((b) => b.status === "confirmed" || b.status === "used");
+  const totalTickets = heldBookings.reduce((sum, b) => sum + (b.quantity || 0), 0);
+  // Admin bookings are free for the user, so they don't count as spending.
+  const totalSpent = heldBookings
+    .filter((b) => b.paymentMethod !== "admin_direct_booking")
+    .reduce((sum, b) => sum + (b.totalPrice || 0), 0);
+  const eventsBooked = new Set(heldBookings.map((b) => b.eventId?._id || b.eventId)).size;
+
+  // Which channels a ticket reached, in words, for the attendee table.
+  const deliveredVia = (notified: any): string =>
+    [notified?.push && "app", notified?.whatsapp && "WhatsApp", notified?.sms && "SMS", notified?.email && "email"]
+      .filter(Boolean)
+      .join(", ");
+
+  const resendTicket = async (bookingId: string, attendee: any) => {
+    setResending(attendee.attendeeId);
+    try {
+      const response: any = await CentralizedApi.tickets.resend(bookingId, attendee.attendeeId);
+      const result = response?.data?.attendee || {};
+      const via = deliveredVia(result.notified);
+      toast({
+        title: result.delivered ? `Ticket re-sent to ${attendee.name}` : `Couldn't reach ${attendee.name}`,
+        description: result.delivered
+          ? `Delivered by ${via}.`
+          : result.deliveryError || "No channel could deliver it.",
+        variant: result.delivered ? "default" : "destructive",
+      });
+      setTicketsReload((n) => n + 1);
+    } catch (error) {
+      toast({
+        title: "Couldn't re-send the ticket",
+        description: error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setResending(null);
+    }
+  };
+
+  const exportTickets = () => {
+    const rows = [["Event", "Event date", "Booking status", "Ticket number", "Attendee", "Phone", "Checked in", "Face verified", "Amount (INR)", "Payment ID", "Booked at"]];
+    for (const b of bookings) {
+      const attendees = b.attendees?.length ? b.attendees : [{}];
+      for (const a of attendees) {
+        rows.push([
+          b.eventId?.name || "",
+          b.eventId?.date ? new Date(b.eventId.date).toLocaleDateString() : "",
+          b.status || "",
+          a.ticketNumber || b.ticketNumbers || "",
+          a.name || "",
+          a.phone || "",
+          a.checkedIn ? (a.checkInTime ? new Date(a.checkInTime).toLocaleString() : "yes") : "no",
+          a.faceVerified ? "yes" : "no",
+          String(b.totalPrice ?? ""),
+          b.razorpayPaymentId || b.paymentId || "",
+          b.bookedAt ? new Date(b.bookedAt).toLocaleString() : "",
+        ]);
+      }
+    }
+    const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    link.download = `tickets-${(user?.name || user?.phone || "user").toString().replace(/\W+/g, "_")}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -384,12 +354,12 @@ const UserDetailsModal = ({ user, isOpen, onClose }: UserDetailsModalProps) => {
             <span>User Details & Tickets</span>
           </DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            Complete user information, tickets, and event registrations
+            Complete user information and tickets
           </DialogDescription>
         </DialogHeader>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 overflow-hidden">
-          <TabsList className="grid w-full grid-cols-3 glass rounded-xl">
+          <TabsList className="grid w-full grid-cols-2 glass rounded-xl">
             <TabsTrigger 
               value="profile" 
               className="flex items-center space-x-2 data-[state=active]:gradient-primary data-[state=active]:text-black"
@@ -403,13 +373,6 @@ const UserDetailsModal = ({ user, isOpen, onClose }: UserDetailsModalProps) => {
             >
               <CreditCard className="h-4 w-4" />
               <span>Tickets</span>
-            </TabsTrigger>
-            <TabsTrigger 
-              value="registrations"
-              className="flex items-center space-x-2 data-[state=active]:gradient-accent data-[state=active]:text-black"
-            >
-              <Calendar className="h-4 w-4" />
-              <span>Registrations</span>
             </TabsTrigger>
           </TabsList>
 
@@ -524,10 +487,12 @@ const UserDetailsModal = ({ user, isOpen, onClose }: UserDetailsModalProps) => {
                           <div className="flex items-center justify-between gap-4">
                             <p className="text-m text-muted-foreground">Face ID</p>
                             <p className="font-mono text-sm bg-muted/50 px-2 py-1 rounded flex items-center">
-                              {isFaceGenerated() ? (
-                                <><CheckCircle className="h-3.5 w-3.5 text-green-500 mr-1.5" /> Generated</>
+                              {hasFaceId(user) === null ? (
+                                <span className="text-muted-foreground">Checking…</span>
+                              ) : isFaceGenerated() ? (
+                                <><CheckCircle className="h-3.5 w-3.5 text-green-500 mr-1.5" /> Active</>
                               ) : (
-                                <><XCircle className="h-3.5 w-3.5 text-red-500 mr-1.5" /> Not Generated</>
+                                <><XCircle className="h-3.5 w-3.5 text-red-500 mr-1.5" /> None</>
                               )}
                             </p>
                           </div>
@@ -568,15 +533,15 @@ const UserDetailsModal = ({ user, isOpen, onClose }: UserDetailsModalProps) => {
                     </CardHeader>
                     <CardContent className="space-y-6">
                       <div className="text-center">
-                        <div className="text-3xl font-bold gradient-text">{userRegistrations.length}</div>
-                        <p className="text-sm text-muted-foreground">Registered Events</p>
+                        <div className="text-3xl font-bold gradient-text">{eventsBooked}</div>
+                        <p className="text-sm text-muted-foreground">Events Booked</p>
                       </div>
                       <div className="text-center">
-                        <div className="text-3xl font-bold text-primary">{userTickets.length}</div>
+                        <div className="text-3xl font-bold text-primary">{totalTickets}</div>
                         <p className="text-sm text-muted-foreground">Total Tickets</p>
                       </div>
                       <div className="text-center">
-                        <div className="text-3xl font-bold text-green-600">${totalSpent}</div>
+                        <div className="text-3xl font-bold text-green-600">₹{totalSpent.toLocaleString("en-IN")}</div>
                         <p className="text-sm text-muted-foreground">Total Spent</p>
                       </div>
                     </CardContent>
@@ -587,74 +552,183 @@ const UserDetailsModal = ({ user, isOpen, onClose }: UserDetailsModalProps) => {
 
             <TabsContent value="tickets" className="space-y-4 animate-fade-in">
               <div className="flex justify-between items-center">
-                <h3 className="text-xl font-semibold gradient-text">🎫 User Tickets</h3>
-                <Button variant="outline" size="sm" className="hover-glow" disabled={userTickets.length === 0}>
-                  <Download className="h-4 w-4 mr-2" />
-                  Export Tickets
-                </Button>
+                <h3 className="text-xl font-semibold gradient-text">🎫 Tickets</h3>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={() => setBookOpen(true)}>
+                    <Ticket className="h-4 w-4 mr-2" />
+                    Book ticket
+                  </Button>
+                  <Button variant="outline" size="sm" className="hover-glow" disabled={bookings.length === 0} onClick={exportTickets}>
+                    <Download className="h-4 w-4 mr-2" />
+                    Export Tickets
+                  </Button>
+                </div>
               </div>
-              
+              <AdminBookTicketDialog
+                user={user}
+                open={bookOpen}
+                onOpenChange={setBookOpen}
+                onBooked={() => setTicketsReload((n) => n + 1)}
+              />
+
               {ticketsLoading ? (
                 <div className="flex items-center justify-center py-8">
                   <p className="text-muted-foreground">Loading tickets...</p>
                 </div>
-              ) : userTickets && userTickets.length > 0 ? (
+              ) : ticketsError ? (
+                <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  Couldn't load tickets: {ticketsError}
+                </div>
+              ) : bookings.length > 0 ? (
                 <div className="space-y-4">
-                  {userTickets.map((ticket) => {
-                    const ticketId = ticket._id || ticket.id || ticket.ticketId;
-                    const eventName = ticket.eventName || ticket.event?.name || 'Unknown Event';
-                    const purchaseDate = ticket.purchaseDate ? new Date(ticket.purchaseDate).toLocaleDateString() : 'Unknown';
-                    const checkInTime = ticket.checkInTime ? new Date(ticket.checkInTime).toLocaleString() : 'Not checked in';
-                    const status = ticket.status || 'active';
-                    const price = ticket.price || 'N/A';
-                    const paymentId = ticket.paymentId || 'N/A';
+                  {bookings.map((booking) => {
+                    const event = booking.eventId || {};
+                    // One per attendee; booking.ticketNumbers is a single string
+                    // (the booker's), kept for bookings from before attendees.
+                    const attendeeNumbers = (booking.attendees || []).map((a: any) => a.ticketNumber).filter(Boolean);
+                    const ticketNumbers: string[] = attendeeNumbers.length
+                      ? attendeeNumbers
+                      : booking.ticketNumbers ? [String(booking.ticketNumbers)] : [];
+                    const unpaid = booking.status === "temporary";
 
                     return (
-                      <Card key={ticketId} className="glass-card border-primary/20 hover-lift">
-                        <CardContent className="p-6">
-                          <div className="flex justify-between items-start mb-4">
+                      <Card key={booking._id} className="glass-card border-primary/20">
+                        <CardContent className="p-5 space-y-4">
+                          <div className="flex justify-between items-start gap-4">
                             <div>
-                              <h4 className="text-lg font-semibold gradient-text">{eventName}</h4>
-                              <p className="text-sm text-muted-foreground">Ticket ID: {ticketId}</p>
-                              <p className="text-sm text-muted-foreground mt-1">Payment ID: {paymentId}</p>
+                              <h4 className="text-lg font-semibold gradient-text">{event.name || "Event no longer available"}</h4>
+                              <p className="text-sm text-muted-foreground flex flex-wrap gap-x-4 gap-y-1 mt-1">
+                                {event.date && (
+                                  <span className="inline-flex items-center gap-1">
+                                    <Calendar className="h-3.5 w-3.5" />
+                                    {new Date(event.date).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+                                  </span>
+                                )}
+                                {event.location && (
+                                  <span className="inline-flex items-center gap-1">
+                                    <MapPin className="h-3.5 w-3.5" />
+                                    {event.location}
+                                  </span>
+                                )}
+                              </p>
+                              {booking.isPurchaser === false && (
+                                <p className="text-xs text-muted-foreground mt-1">Guest ticket — booked by someone else</p>
+                              )}
                             </div>
-                            {getStatusBadge(status)}
+                            {unpaid ? (
+                              <Badge variant="outline" className="border-amber-300 text-amber-700">Not paid</Badge>
+                            ) : (
+                              getStatusBadge(booking.status)
+                            )}
                           </div>
 
-                          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-4">
-                            <div className="flex items-center space-x-2">
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                            <div>
+                              <p className="text-xs text-muted-foreground">Tickets</p>
+                              <p className="font-medium">
+                                {booking.quantity || 0} × {booking.seatType || "General"}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-muted-foreground">Amount</p>
+                              <p className="font-medium">₹{(booking.totalPrice || 0).toLocaleString("en-IN")}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-muted-foreground">Payment</p>
+                              <p className="font-medium capitalize">
+                                {booking.paymentMethod === "admin_direct_booking"
+                                  ? "Booked by admin"
+                                  : booking.paymentStatus || "—"}
+                              </p>
+                              {(booking.razorpayPaymentId || booking.paymentId) && (
+                                <p className="text-xs text-muted-foreground font-mono break-all">
+                                  {booking.razorpayPaymentId || booking.paymentId}
+                                </p>
+                              )}
+                            </div>
+                            <div>
+                              <p className="text-xs text-muted-foreground">Booked</p>
+                              <p className="font-medium">
+                                {booking.bookedAt ? new Date(booking.bookedAt).toLocaleDateString() : "—"}
+                              </p>
+                            </div>
+                          </div>
+
+                          {ticketNumbers.length > 0 && (
+                            <div className="flex flex-wrap items-center gap-2 text-sm">
                               <Ticket className="h-4 w-4 text-primary" />
-                              <div>
-                                <p className="text-xs text-muted-foreground">Price</p>
-                                <p className="text-sm font-medium">₹{price}</p>
-                              </div>
+                              {ticketNumbers.map((n) => (
+                                <Badge key={n} variant="outline" className="font-mono">{n}</Badge>
+                              ))}
                             </div>
-                            <div className="flex items-center space-x-2">
-                              <Calendar className="h-4 w-4 text-primary" />
-                              <div>
-                                <p className="text-xs text-muted-foreground">Purchase Date</p>
-                                <p className="text-sm font-medium">{purchaseDate}</p>
-                              </div>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                              <Clock className="h-4 w-4 text-primary" />
-                              <div>
-                                <p className="text-xs text-muted-foreground">Check-in Time</p>
-                                <p className="text-sm font-medium">{checkInTime}</p>
-                              </div>
-                            </div>
-                          </div>
+                          )}
 
-                          <div className="grid grid-cols-2 gap-4 text-sm">
-                            <div>
-                              <p className="text-muted-foreground">Status</p>
-                              <p className="font-medium capitalize">{status}</p>
-                            </div>
-                            <div>
-                              <p className="text-muted-foreground">User Email</p>
-                              <p className="font-medium text-xs">{ticket.userEmail || user?.email || 'N/A'}</p>
-                            </div>
-                          </div>
+                          {booking.attendees?.length > 0 && (
+                            <table className="w-full text-sm">
+                              <thead>
+                                <tr className="text-left text-xs text-muted-foreground">
+                                  <th className="py-1 font-medium">Attendee</th>
+                                  <th className="py-1 font-medium">Ticket</th>
+                                  <th className="py-1 font-medium">Check-in</th>
+                                  <th className="py-1 font-medium">Face</th>
+                                  <th className="py-1 font-medium">Sent</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {booking.attendees.map((a: any) => (
+                                  <tr key={a.attendeeId || a.ticketNumber || a.phone} className="border-t border-border/40">
+                                    <td className="py-1.5">
+                                      {a.name || "—"}
+                                      {a.isPurchaser && <span className="text-xs text-muted-foreground"> (booker)</span>}
+                                      {a.phone && <div className="text-xs text-muted-foreground">{a.phone}</div>}
+                                    </td>
+                                    <td className="py-1.5 font-mono text-xs">{a.ticketNumber || "Not allotted"}</td>
+                                    <td className="py-1.5">
+                                      {a.checkedIn ? (
+                                        <span className="inline-flex items-center gap-1 text-green-700">
+                                          <CheckCircle className="h-3.5 w-3.5" />
+                                          {a.checkInTime ? new Date(a.checkInTime).toLocaleString() : "Checked in"}
+                                        </span>
+                                      ) : (
+                                        <span className="text-muted-foreground">Not yet</span>
+                                      )}
+                                    </td>
+                                    <td className="py-1.5">
+                                      {a.faceVerified ? (
+                                        <span className="text-green-700">Verified</span>
+                                      ) : (
+                                        <span className="text-muted-foreground">—</span>
+                                      )}
+                                    </td>
+                                    <td className="py-1.5">
+                                      {a.delivered ? (
+                                        <span className="text-green-700">{deliveredVia(a.notified) || "Yes"}</span>
+                                      ) : (
+                                        <span className="text-red-600 text-xs" title={a.deliveryError || undefined}>
+                                          Not sent{a.deliveryError ? `: ${a.deliveryError}` : ""}
+                                        </span>
+                                      )}
+                                      {booking.status === "confirmed" && a.attendeeId && (
+                                        <button
+                                          type="button"
+                                          className="block text-xs underline text-primary disabled:opacity-50"
+                                          disabled={resending === a.attendeeId}
+                                          onClick={() => resendTicket(booking._id, a)}
+                                        >
+                                          {resending === a.attendeeId ? "Sending…" : "Resend"}
+                                        </button>
+                                      )}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          )}
+
+                          {booking.status === "cancelled" && booking.cancellationReason && (
+                            <p className="text-xs text-red-600">Cancelled: {booking.cancellationReason}</p>
+                          )}
                         </CardContent>
                       </Card>
                     );
@@ -665,125 +739,7 @@ const UserDetailsModal = ({ user, isOpen, onClose }: UserDetailsModalProps) => {
                   <div className="text-center">
                     <Ticket className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                     <p className="text-muted-foreground">No tickets found</p>
-                    <p className="text-xs text-muted-foreground mt-1">User has not purchased any tickets yet</p>
-                  </div>
-                </div>
-              )}
-            </TabsContent>
-
-            <TabsContent value="registrations" className="space-y-4 animate-fade-in">
-              <div className="flex justify-between items-center">
-                <h3 className="text-xl font-semibold gradient-text">📋 Event Registrations</h3>
-                <Button variant="outline" size="sm" className="hover-glow" disabled={userRegistrations.length === 0}>
-                  <Download className="h-4 w-4 mr-2" />
-                  Export Registrations
-                </Button>
-              </div>
-
-              {registrationsLoading ? (
-                <div className="flex items-center justify-center py-8">
-                  <p className="text-muted-foreground">Loading registrations...</p>
-                </div>
-              ) : userRegistrations && userRegistrations.length > 0 ? (
-                <div className="space-y-4">
-                  {userRegistrations.map((registration) => {
-                    // Map backend fields to display format
-                    const eventId = registration.eventId?._id || registration.eventId || 'N/A';
-                    const eventName = registration.eventId?.name || registration.eventName || 'Unknown Event';
-                    const registeredOn = registration.registrationDate ? new Date(registration.registrationDate).toLocaleDateString() : 'Unknown';
-                    const status = registration.status || 'pending';
-                    const regId = registration._id || registration.id || registration.registrationId;
-                    const faceVerificationStatus = registration.faceVerificationStatus;
-                    const ticketAvailabilityStatus = registration.ticketAvailabilityStatus;
-                    const ticketIssued = registration.ticketIssued;
-
-                    return (
-                      <Card key={regId} className="glass-card border-primary/20 hover-lift">
-                        <CardContent className="p-6">
-                          <div className="flex justify-between items-start mb-4">
-                            <div>
-                              <h4 className="text-lg font-semibold gradient-text">{eventName}</h4>
-                              <p className="text-sm text-muted-foreground">Registration ID: {regId}</p>
-                              <p className="text-sm text-muted-foreground mt-1">Registered on: {registeredOn}</p>
-                            </div>
-                            {getStatusBadge(status)}
-                          </div>
-
-                          {/* Auto-Calculated Status Fields */}
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4 p-4 bg-muted/30 rounded-lg">
-                            <div className="space-y-1">
-                              <p className="text-xs font-medium text-muted-foreground uppercase">Face Verification</p>
-                              <div className="flex items-center gap-2">
-                                {faceVerificationStatus ? (
-                                  <>
-                                    <CheckCircle className="h-4 w-4 text-green-500" />
-                                    <span className="text-sm font-medium text-green-600">Verified ✅</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <XCircle className="h-4 w-4 text-red-500" />
-                                    <span className="text-sm font-medium text-red-600">Pending</span>
-                                  </>
-                                )}
-                              </div>
-                            </div>
-
-                            <div className="space-y-1">
-                              <p className="text-xs font-medium text-muted-foreground uppercase">Ticket Availability</p>
-                              <div className="flex items-center gap-2">
-                                {ticketAvailabilityStatus === 'available' ? (
-                                  <>
-                                    <CheckCircle className="h-4 w-4 text-green-500" />
-                                    <span className="text-sm font-medium text-green-600">Available ✅</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <AlertCircle className="h-4 w-4 text-yellow-500" />
-                                    <span className="text-sm font-medium text-yellow-600">Sold Out</span>
-                                  </>
-                                )}
-                              </div>
-                            </div>
-
-                            <div className="space-y-1">
-                              <p className="text-xs font-medium text-muted-foreground uppercase">Ticket Issued</p>
-                              <div className="flex items-center gap-2">
-                                {ticketIssued ? (
-                                  <>
-                                    <Ticket className="h-4 w-4 text-green-500" />
-                                    <span className="text-sm font-medium text-green-600">Yes ✅</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <Clock className="h-4 w-4 text-yellow-500" />
-                                    <span className="text-sm font-medium text-yellow-600">Pending</span>
-                                  </>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-4 text-sm border-t pt-4">
-                            <div>
-                              <p className="text-muted-foreground">Registration Status</p>
-                              <p className="font-medium capitalize">{status}</p>
-                            </div>
-                            <div>
-                              <p className="text-muted-foreground">Event ID</p>
-                              <p className="font-mono text-xs bg-muted/50 px-2 py-1 rounded">{eventId.substring(0, 12)}...</p>
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="flex items-center justify-center py-8 border border-dashed rounded-lg">
-                  <div className="text-center">
-                    <Calendar className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                    <p className="text-muted-foreground">No registrations found</p>
-                    <p className="text-xs text-muted-foreground mt-1">User has not registered for any events</p>
+                    <p className="text-xs text-muted-foreground mt-1">This user hasn't booked any events yet</p>
                   </div>
                 </div>
               )}

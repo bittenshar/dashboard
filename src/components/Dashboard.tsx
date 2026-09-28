@@ -142,7 +142,7 @@ const Dashboard = () => {
       gradient: "gradient-primary",
       description: "Facial recognition data",
       route: "/face-images",
-      actions: ["Manage Images", "Sync Rekognition", "Cleanup"]
+      actions: ["Manage Images", "Sync Faces", "Cleanup"]
     },
     {
       title: "Organisers",

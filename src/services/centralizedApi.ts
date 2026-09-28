@@ -318,10 +318,12 @@ export const CentralizedApi = {
      * stores the photo. Sent as multipart, which call() can't do: it always
      * JSON-encodes the body.
      */
-    async search(image: File, expectedUserId?: string) {
+    async search(image: File, userMongoId?: string) {
       const form = new FormData();
       form.append('image', image);
-      if (expectedUserId) form.append('userId', expectedUserId);
+      // The backend looks the user up and compares against every ID their
+      // face may be filed under (userId, or _id for users without one).
+      if (userMongoId) form.append('id', userMongoId);
 
       // Let the browser set the multipart Content-Type (with its boundary).
       const { 'Content-Type': _json, ...headers } = CentralizedApi.getAuthHeaders();
@@ -338,6 +340,50 @@ export const CentralizedApi = {
     /** Delete the user's face ID from AWS so they can enrol again. */
     removeFace(id: string, reason?: string) {
       return CentralizedApi.call('DELETE', `/admin/face-review/users/${encodeURIComponent(id)}/face`, { reason });
+    },
+
+    /** IDs (userId or _id) that own a face in the face system. */
+    faceOwners() {
+      return CentralizedApi.get('/admin/face-review/face-owners');
+    },
+
+    /** Send one message to chosen users (push + in-app Notifications list). */
+    notify(payload: { userIds: string[]; title: string; body: string; purpose?: string }) {
+      return CentralizedApi.post('/admin/face-review/notify', payload);
+    },
+
+    /** Clear the user's DigiLocker data and notify them to verify with DigiLocker again. */
+    resetDigilocker(id: string, reason?: string) {
+      return CentralizedApi.call('DELETE', `/admin/face-review/users/${encodeURIComponent(id)}/digilocker`, { reason });
+    },
+  },
+
+  // ===================================================================
+  // BROADCASTS (admin)
+  // ===================================================================
+
+  broadcasts: {
+    /** Per platform: how many phones an update push reaches, and the store it points to. */
+    appUpdatePreview() {
+      return CentralizedApi.get('/admin/notifications/app-update');
+    },
+
+    /** Change the latest version, force update or store link the app checks at start-up. */
+    saveAppVersion(changes: Partial<Record<'ios' | 'android', { latestVersion?: string; forceUpdate?: boolean; storeUrl?: string }>>) {
+      return CentralizedApi.patch('/admin/notifications/app-version', changes);
+    },
+
+    /**
+     * Which users a push can reach: every phone is checked with a Firebase dry
+     * run (nothing is sent), and dead registrations are removed.
+     */
+    reachCheck() {
+      return CentralizedApi.post('/admin/notifications/reach-check');
+    },
+
+    /** Push "update the app": iPhones get the App Store link, the rest the Play Store. */
+    sendAppUpdate(payload: { title: string; body: string; platforms: ('ios' | 'android')[] }) {
+      return CentralizedApi.post('/admin/notifications/app-update', payload);
     },
   },
 
@@ -506,11 +552,37 @@ export const CentralizedApi = {
       return CentralizedApi.get(`/tickets/${id}`);
     },
 
-    getByUserId(userId: string) {
-      console.log(`🎫 [TICKETS] getByUserId(${userId}) called`);
-      console.log(`  ├─ User ID: ${userId}`);
-      console.log(`  └─ Endpoint: /tickets/users/${userId}`);
-      return CentralizedApi.get(`/tickets/users/${userId}`);
+    /**
+     * A user's tickets. They live in bookings — there is no /tickets route on
+     * the backend. `userMongoId` is the user's _id: bookings reference that.
+     * Returns { data: { bookings } }, each with its event and attendees.
+     */
+    getByUserId(userMongoId: string) {
+      return CentralizedApi.get(`/booking/user/${encodeURIComponent(userMongoId)}`);
+    },
+
+    /**
+     * Admin books tickets for a user without payment. The backend issues and
+     * sends one ticket per attendee, as for a paid booking. `attendees` is
+     * needed only for more than one ticket; the first should be the user.
+     */
+    adminBook(payload: {
+      userId: string;
+      eventId: string;
+      seatingId: string;
+      seatType: string;
+      quantity: number;
+      attendees?: { name: string; phone: string }[];
+      adminNotes?: string;
+    }) {
+      return CentralizedApi.post('/booking/admin/book-without-payment', payload);
+    },
+
+    /** Send one ticket again (WhatsApp/SMS/email and an app notification). */
+    resend(bookingId: string, attendeeId: string) {
+      return CentralizedApi.post(
+        `/booking/${encodeURIComponent(bookingId)}/attendees/${encodeURIComponent(attendeeId)}/resend`
+      );
     },
 
     create(data: any) {

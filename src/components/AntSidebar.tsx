@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   AppstoreOutlined,
   ContainerOutlined,
@@ -11,9 +11,11 @@ import {
   NotificationOutlined,
   ScanOutlined,
 } from "@ant-design/icons";
-import { Button, Menu, Switch } from "antd";
+import { Badge, Button, Menu, Switch } from "antd";
 import type { MenuProps } from "antd";
 import { useNavigate, useLocation } from "react-router-dom";
+import { useApiContext } from "@/contexts/ApiIntegrationContext";
+import { countByVerificationState, unwrapUsers } from "@/lib/verification";
 import CreateEventModal from "./CreateEventModal";
 
 type MenuItem = Required<MenuProps>["items"][number];
@@ -22,6 +24,7 @@ const items: MenuItem[] = [
   { key: "/", icon: <PieChartOutlined />, label: "Dashboard" },
   { key: "/users", icon: <DesktopOutlined />, label: "User Verification" },
   { key: "/face-check", icon: <ScanOutlined />, label: "Face ID Check" },
+  { key: "/notifications", icon: <NotificationOutlined />, label: "Notifications" },
   { key: "/events", icon: <ContainerOutlined />, label: "Event Management" },
   { key: "/feedback", icon: <AppstoreOutlined />, label: "User Feedback" },
   { key: "/admin", icon: <AppstoreOutlined />, label: "Admin" },
@@ -38,6 +41,28 @@ const AntSidebar = () => {
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const navigate = useNavigate();
   const location = useLocation();
+  const api = useApiContext();
+
+  // Users with a selfie waiting for an admin — shown on the User Verification
+  // icon so it's visible even with the sidebar collapsed.
+  const toVerify = useMemo(() => countByVerificationState(unwrapUsers(api.users)).to_verify, [api.users]);
+  const menuItems = useMemo<MenuItem[]>(
+    () =>
+      items.map((item: any) =>
+        item?.key === "/users"
+          ? {
+              ...item,
+              icon: (
+                <Badge count={toVerify} size="small" offset={[6, -2]} overflowCount={99} title={`${toVerify} to verify`}>
+                  {item.icon}
+                </Badge>
+              ),
+              label: toVerify > 0 ? `${item.label} (${toVerify})` : item.label,
+            }
+          : item
+      ),
+    [toVerify]
+  );
 
   // Optional: Update Tailwind `dark` class
   useEffect(() => {
@@ -94,7 +119,7 @@ const AntSidebar = () => {
           selectedKeys={[location.pathname]}
           mode="inline"
           inlineCollapsed={collapsed}
-          items={items}
+          items={menuItems}
           onClick={handleMenuClick}
           theme={theme}
           style={{

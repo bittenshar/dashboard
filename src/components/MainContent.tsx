@@ -1,10 +1,11 @@
 // src/components/MainContent.tsx
 
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Link } from "react-router-dom";
+import { countByVerificationState, unwrapUsers } from "@/lib/verification";
 import { Badge } from "@/components/ui/badge";
 import { Shield, Wifi, WifiOff, RefreshCw } from "lucide-react";
 import { useApiContext } from "@/contexts/ApiIntegrationContext";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import Dashboard from "@/components/Dashboard";
@@ -19,9 +20,12 @@ import UserFeedbackSystem from "./UserFeedbackSystem";
 import AdminPanel from "./AdminPanel";
 import AdsManagement from "./AdsManagement";
 import FaceIdCheck from "./FaceIdCheck";
+import Notifications from "./Notifications";
 
 const MainContent = () => {
   const api = useApiContext();
+  const headerUsers = useMemo(() => unwrapUsers(api.users), [api.users]);
+  const verificationCounts = useMemo(() => countByVerificationState(headerUsers), [headerUsers]);
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'checking'>('checking');
   const [lastSyncTime, setLastSyncTime] = useState<string>('');
 
@@ -179,14 +183,19 @@ const MainContent = () => {
           </div>
         )}
 
-        {/* Quick Stats Bar */}
-        {api.dashboardStats && connectionStatus === 'connected' && (
+        {/* Quick Stats Bar — counted live from the loaded lists */}
+        {connectionStatus === 'connected' && (
           <div className="px-6 pb-3">
-            <div className="flex space-x-6 text-xs text-muted-foreground">
-              <span>Users: {api.dashboardStats.totalUsers}</span>
-              <span>Events: {api.dashboardStats.totalEvents}</span>
-              <span>Registrations: {api.dashboardStats.totalRegistrations}</span>
-              <span>Pending: {api.dashboardStats.pendingVerifications}</span>
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-muted-foreground">
+              <span>Users: {headerUsers.length}</span>
+              <span>Events: {Array.isArray(api.events) ? api.events.length : 0}</span>
+              <Link
+                to="/users"
+                className={verificationCounts.to_verify > 0 ? "font-semibold text-amber-700 hover:underline" : "hover:underline"}
+              >
+                To verify: {verificationCounts.to_verify}
+              </Link>
+              <span>No selfie yet: {verificationCounts.no_selfie}</span>
             </div>
           </div>
         )}
@@ -204,6 +213,11 @@ const MainContent = () => {
           <Route path="/users" element={
             <PermissionGuard requiredPermission="users">
               <UserVerificationPanelRedesigned />
+            </PermissionGuard>
+          } />
+          <Route path="/notifications" element={
+            <PermissionGuard requiredPermission="admin">
+              <Notifications />
             </PermissionGuard>
           } />
           <Route path="/face-check" element={

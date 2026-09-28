@@ -5,12 +5,22 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Calendar, Users, MapPin, CreditCard, Mail, Phone, Plus, Eye, Edit, Trash, X } from "lucide-react";
+import { Calendar, Users, MapPin, CreditCard, Mail, Phone, Plus, Eye, Edit, Trash, X, Ticket } from "lucide-react";
 import EventAnalytics from "./EventAnalytics";
 import CreateEventModal from "./CreateEventModal";
 import EditEventModal from "./EditEventModal";
+import AdminBookTicketDialog from "./AdminBookTicketDialog";
 import { useApiContext } from "@/contexts/ApiIntegrationContext";
+import { CentralizedApi } from "@/services/centralizedApi";
  
+interface EventSummary {
+  ticketsSold: number;
+  bookings: number;
+  revenue: number;
+  complimentary: number;
+  checkedIn: number;
+}
+
 const EventManagement = () => {
   const api = useApiContext();
   const [selectedEvent, setSelectedEvent] = useState("");
@@ -18,6 +28,28 @@ const EventManagement = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingEvent, setEditingEvent] = useState<any>(null);
+  // The event an admin is booking a ticket on, while that dialog is open.
+  const [bookingEvent, setBookingEvent] = useState<any>(null);
+  // Real ticket figures per event, from bookings (GET /booking/admin/event-summaries).
+  const [summaries, setSummaries] = useState<Record<string, EventSummary>>({});
+
+  const loadSummaries = async () => {
+    try {
+      const response: any = await CentralizedApi.get("/booking/admin/event-summaries");
+      const byEvent: Record<string, EventSummary> = {};
+      (response?.data?.summaries || []).forEach((row: EventSummary & { eventId: string }) => {
+        byEvent[row.eventId] = row;
+      });
+      setSummaries(byEvent);
+    } catch (error) {
+      console.error("Failed to load event ticket figures:", error);
+    }
+  };
+
+  // Refetch whenever the event list does, so a new booking shows up.
+  useEffect(() => {
+    loadSummaries();
+  }, [api.events]);
   const [showEventModal, setShowEventModal] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -158,7 +190,30 @@ const EventManagement = () => {
     setShowAnalytics(false);
   };
 
-  const checkedInCount = attendees.filter(a => a.checkedIn).length;
+  /**
+   * An event's ticket numbers. Capacity and prices live on its seat types
+   * (`seatings`); sold, revenue and check-ins come from bookings. Revenue is
+   * what was paid — free admin tickets count as sold but not as income.
+   */
+  const ticketFigures = (event: any) => {
+    const id = String(event._id || event.id || event.eventId || "");
+    const seatings: any[] = (event.seatings || []).filter((s: any) => s.isActive !== false);
+    const capacity = seatings.reduce((sum, s) => sum + (s.totalSeats || 0), 0);
+    const prices = seatings.map((s) => Number(s.price) || 0);
+    const summary = summaries[id];
+    return {
+      sold: summary ? summary.ticketsSold : seatings.reduce((sum, s) => sum + (s.seatsSold || 0), 0),
+      capacity,
+      revenue: summary ? summary.revenue : 0,
+      complimentary: summary ? summary.complimentary : 0,
+      checkedIn: summary ? summary.checkedIn : 0,
+      minPrice: prices.length ? Math.min(...prices) : 0,
+      maxPrice: prices.length ? Math.max(...prices) : 0,
+    };
+  };
+
+  const priceLabel = (minPrice: number, maxPrice: number) =>
+    minPrice === maxPrice ? formatCurrency(minPrice) : `${formatCurrency(minPrice)} – ${formatCurrency(maxPrice)}`;
 
   // Show analytics if requested
   if (showAnalytics && selectedEvent) {
@@ -245,10 +300,11 @@ const EventManagement = () => {
           <div className="flex-1 overflow-y-auto pr-2 pl-1">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-2 pb-4">
               {filteredEvents.map((event, index) => {
-                const soldTickets = event.ticketsSold || 0;
-                const totalTickets = event.totalTickets || 0;
+                const figures = ticketFigures(event);
+                const soldTickets = figures.sold;
+                const totalTickets = figures.capacity;
                 const progress = calculateProgress(soldTickets, totalTickets);
-                const revenue = soldTickets * (event.ticketPrice || 0);
+                const revenue = figures.revenue;
                 
                 // Use multiple fallbacks for event ID
                 const eventId = event.eventId || (event as any)._id || (event as any).id || `event-${index}`;
@@ -299,10 +355,12 @@ const EventManagement = () => {
                       <div className="flex justify-between items-center pt-2 border-t">
                         <div>
                           <p className="text-sm font-bold text-green-600">{formatCurrency(revenue)}</p>
-                          <p className="text-xs text-gray-500">Revenue</p>
+                          <p className="text-xs text-gray-500">
+                            Revenue{figures.complimentary > 0 ? ` · ${figures.complimentary} free` : ""}
+                          </p>
                         </div>
                         <div className="text-right">
-                          <p className="text-sm font-bold text-gray-900">{formatCurrency(event.ticketPrice || 0)}</p>
+                          <p className="text-sm font-bold text-gray-900">{priceLabel(figures.minPrice, figures.maxPrice)}</p>
                           <p className="text-xs text-gray-500">Per ticket</p>
                         </div>
                       </div>
@@ -340,10 +398,10 @@ const EventManagement = () => {
               
               if (!currentEvent) return null;
               
-              const soldTickets = currentEvent.ticketsSold || 0;
-              const totalTickets = currentEvent.totalTickets || 0;
-              const ticketPrice = currentEvent.ticketPrice || 0;
-              const revenue = soldTickets * ticketPrice;
+              const figures = ticketFigures(currentEvent);
+              const soldTickets = figures.sold;
+              const totalTickets = figures.capacity;
+              const revenue = figures.revenue;
               const progressPercentage = calculateProgress(soldTickets, totalTickets);
               
               return (
@@ -411,9 +469,14 @@ const EventManagement = () => {
                                 {formatCurrency(revenue)}
                               </div>
                               <div className="text-sm font-medium text-green-600">Revenue</div>
+                              {figures.complimentary > 0 && (
+                                <div className="text-xs text-green-700 mt-1">
+                                  + {figures.complimentary} free admin ticket{figures.complimentary === 1 ? "" : "s"}
+                                </div>
+                              )}
                             </div>
                             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                              <div className="text-2xl font-bold text-blue-700 mb-1">{checkedInCount}</div>
+                              <div className="text-2xl font-bold text-blue-700 mb-1">{figures.checkedIn}</div>
                               <div className="text-sm font-medium text-blue-600">Checked In</div>
                             </div>
                           </div>
@@ -428,6 +491,21 @@ const EventManagement = () => {
                           >
                             <Eye className="h-4 w-4 mr-2" />
                             View Analytics
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="lg"
+                            className="w-full h-12 border-orange-300 text-orange-700 hover:bg-orange-50 font-medium"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setBookingEvent({
+                                _id: currentEvent._id || currentEvent.id || currentEvent.eventId,
+                                name: currentEvent.name,
+                              });
+                            }}
+                          >
+                            <Ticket className="h-4 w-4 mr-2" />
+                            Book ticket for a user
                           </Button>
                           <div className="grid grid-cols-2 gap-3">
                             <Button 
@@ -567,6 +645,17 @@ const EventManagement = () => {
         onClose={handleEditEventClose}
         onEventUpdated={handleEventUpdated}
         eventData={editingEvent}
+      />
+
+      {/* Admin booking on this event: pick a user, no payment */}
+      <AdminBookTicketDialog
+        event={bookingEvent || undefined}
+        open={Boolean(bookingEvent)}
+        onOpenChange={(open) => !open && setBookingEvent(null)}
+        onBooked={() => {
+          api.fetchEvents();
+          loadSummaries();
+        }}
       />
     </div>
   );
