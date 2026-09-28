@@ -225,6 +225,21 @@ export const CentralizedApi = {
       return CentralizedApi.post('/auth/admin-login', credentials);
     },
 
+    googleLogin(credential: string) {
+      console.log(`🔐 [AUTH] googleLogin() called - Endpoint: /auth/admin-login/google`);
+      return CentralizedApi.post('/auth/admin-login/google', { credential });
+    },
+
+    sendLoginOtp(email: string) {
+      console.log(`🔐 [AUTH] sendLoginOtp() called - Endpoint: /auth/admin-login/otp/send`);
+      return CentralizedApi.post('/auth/admin-login/otp/send', { email });
+    },
+
+    verifyLoginOtp(email: string, otp: string) {
+      console.log(`🔐 [AUTH] verifyLoginOtp() called - Endpoint: /auth/admin-login/otp/verify`);
+      return CentralizedApi.post('/auth/admin-login/otp/verify', { email, otp });
+    },
+
     logout() {
       console.log(`🔐 [AUTH] logout() called - Endpoint: /auth/admin-logout`);
       return CentralizedApi.post('/auth/admin-logout', {});

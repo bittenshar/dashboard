@@ -35,6 +35,9 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
   login: (email: string, password: string) => Promise<boolean>;
+  loginWithGoogle: (credential: string) => Promise<void>;
+  sendLoginOtp: (email: string) => Promise<void>;
+  verifyLoginOtp: (email: string, otp: string) => Promise<void>;
   logout: () => void;
   isLoading: boolean;
   getToken: () => string | null;
@@ -138,6 +141,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     AuthManager.setUser(authUser);
   };
 
+  // Password, Google and email-code logins all end in the same backend
+  // response; map it to the frontend user and store the session.
+  const completeLogin = (response: LoginResponse): boolean => {
+    if (response.status !== 'success' || !response.token || !response.data?.user) {
+      console.error('Login failed: Invalid response format', response);
+      return false;
+    }
+
+    const backendUser = response.data.user;
+    const isAdmin = backendUser.role === 'admin' || backendUser.role === 'super-admin';
+
+    // Map backend user to frontend user format
+    const frontendUser: User = {
+      id: backendUser._id || backendUser.id || '1',
+      name: backendUser.fullName || backendUser.name || 'User',
+      email: backendUser.email,
+      role: isAdmin ? 'Admin' : 'Employee',
+      permissions: backendUser.permissions || (isAdmin ? ['all'] : ['users', 'events']),
+      avatar: backendUser.avatar
+    };
+
+    persistSession(frontendUser, response.token);
+    return true;
+  };
+
   const login = async (email: string, password: string): Promise<boolean> => {
     setIsLoading(true);
 
@@ -148,34 +176,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         password
       }) as LoginResponse;
 
-      if (response.status === 'success' && response.token && response.data?.user) {
-        const backendUser = response.data.user;
-        const authToken = response.token;
-        
-        // Map backend user to frontend user format
-        const frontendUser: User = {
-          id: backendUser._id || backendUser.id || '1',
-          name: backendUser.fullName || backendUser.name || 'User',
-          email: backendUser.email,
-          role: backendUser.role === 'admin' ? 'Admin' : 'Employee',
-          permissions: backendUser.permissions || (backendUser.role === 'admin' ? ['all'] : ['users', 'events']),
-          avatar: backendUser.avatar
-        };
-
-        persistSession(frontendUser, authToken);
-        
-        setIsLoading(false);
-        return true;
-      } else {
-        console.error('Login failed: Invalid response format', response);
-        setIsLoading(false);
-        return false;
-      }
+      const success = completeLogin(response);
+      setIsLoading(false);
+      return success;
     } catch (error) {
       console.error('Login error:', error);
       setIsLoading(false);
       return false;
     }
+  };
+
+  // The passwordless methods throw with the backend's message (wrong code,
+  // no admin access, …) so the login page can show it. They leave isLoading
+  // alone: ProtectedRoute swaps the login page for a spinner while it's set,
+  // which would lose the "enter your code" step.
+  const loginWithGoogle = async (credential: string): Promise<void> => {
+    const response = await CentralizedApi.auth.googleLogin(credential) as LoginResponse;
+    if (!completeLogin(response)) throw new Error('Google sign-in failed. Please try again.');
+  };
+
+  const sendLoginOtp = async (email: string): Promise<void> => {
+    await CentralizedApi.auth.sendLoginOtp(email);
+  };
+
+  const verifyLoginOtp = async (email: string, otp: string): Promise<void> => {
+    const response = await CentralizedApi.auth.verifyLoginOtp(email, otp) as LoginResponse;
+    if (!completeLogin(response)) throw new Error('Sign-in failed. Please request a new code.');
   };
 
   const logout = async () => {
@@ -201,7 +227,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout, isLoading, getToken }}>
+    <AuthContext.Provider value={{ user, token, login, loginWithGoogle, sendLoginOtp, verifyLoginOtp, logout, isLoading, getToken }}>
       {children}
     </AuthContext.Provider>
   );

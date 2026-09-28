@@ -16,6 +16,10 @@ export const API_CONFIG = {
 // Convenience export for a single constant import
 export const API_BASE = API_CONFIG.BASE_URL;
 
+// OAuth web client ID for "Continue with Google" on the login page; when unset
+// the button is hidden, so builds work before Google sign-in is set up.
+export const GOOGLE_CLIENT_ID = import.meta.env?.VITE_GOOGLE_CLIENT_ID || '';
+
 /**
  * Helper function to build full API URLs
  * @param {string} endpoint - The API endpoint path (e.g., '/feedback')
