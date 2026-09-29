@@ -342,6 +342,36 @@ export const CentralizedApi = {
       return CentralizedApi.call('DELETE', `/admin/face-review/users/${encodeURIComponent(id)}/face`, { reason });
     },
 
+    /** Face-recognition calls and their estimated cost, per event. Needs an MPIN unlock. */
+    usage(costToken: string) {
+      return CentralizedApi.get('/admin/face-review/usage', { headers: { 'X-Cost-Token': costToken } });
+    },
+
+    /** Rates behind the cost estimate: US$ per check, ₹ per US$. Needs an MPIN unlock. */
+    saveCostRates(rates: { usdPerCheck?: number; inrPerUsd?: number }, costToken: string) {
+      return CentralizedApi.patch('/admin/face-review/cost-rates', rates, { headers: { 'X-Cost-Token': costToken } });
+    },
+
+    // ---- MPIN in front of the cost figures ----
+    costPinStatus() {
+      return CentralizedApi.get('/admin/face-review/cost-pin');
+    },
+    setupCostPin(pin: string) {
+      return CentralizedApi.post('/admin/face-review/cost-pin/setup', { pin });
+    },
+    unlockCost(pin: string) {
+      return CentralizedApi.post('/admin/face-review/cost-pin/unlock', { pin });
+    },
+    changeCostPin(currentPin: string, newPin: string) {
+      return CentralizedApi.post('/admin/face-review/cost-pin/change', { currentPin, newPin });
+    },
+    forgotCostPin() {
+      return CentralizedApi.post('/admin/face-review/cost-pin/forgot', {});
+    },
+    resetCostPin(code: string, newPin: string) {
+      return CentralizedApi.post('/admin/face-review/cost-pin/reset', { code, newPin });
+    },
+
     /** IDs (userId or _id) that own a face in the face system. */
     faceOwners() {
       return CentralizedApi.get('/admin/face-review/face-owners');

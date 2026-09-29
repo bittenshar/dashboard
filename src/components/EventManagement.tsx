@@ -10,6 +10,7 @@ import EventAnalytics from "./EventAnalytics";
 import CreateEventModal from "./CreateEventModal";
 import EditEventModal from "./EditEventModal";
 import AdminBookTicketDialog from "./AdminBookTicketDialog";
+import { EventFaceCost, FaceCostSummary, faceCostLine, useFaceUsage } from "./FaceCost";
 import { useApiContext } from "@/contexts/ApiIntegrationContext";
 import { CentralizedApi } from "@/services/centralizedApi";
  
@@ -46,9 +47,14 @@ const EventManagement = () => {
     }
   };
 
+  // Face-recognition cost per event (every face check is counted by the backend).
+  const faceUsage = useFaceUsage();
+
   // Refetch whenever the event list does, so a new booking shows up.
   useEffect(() => {
     loadSummaries();
+    faceUsage.reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api.events]);
   const [showEventModal, setShowEventModal] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -251,6 +257,8 @@ const EventManagement = () => {
         </Button>
       </div>
 
+      <FaceCostSummary usage={faceUsage} />
+
       {/* Filters */}
       <Card>
         <CardContent className="p-6">
@@ -364,6 +372,11 @@ const EventManagement = () => {
                           <p className="text-xs text-gray-500">Per ticket</p>
                         </div>
                       </div>
+                      {faceCostLine(faceUsage.byEvent.get(String(event._id || event.id || event.eventId))) && (
+                        <p className="text-xs text-violet-700 pt-1">
+                          {faceCostLine(faceUsage.byEvent.get(String(event._id || event.id || event.eventId)))}
+                        </p>
+                      )}
                     </CardContent>
                   </Card>
                 );
@@ -481,6 +494,12 @@ const EventManagement = () => {
                             </div>
                           </div>
                         </div>
+
+                        <EventFaceCost
+                          usage={faceUsage.byEvent.get(String(currentEvent._id || currentEvent.id || currentEvent.eventId))}
+                          rates={faceUsage.data?.rates}
+                          locked={faceUsage.locked}
+                        />
 
                         {/* Action Buttons */}
                         <div className="space-y-3">
