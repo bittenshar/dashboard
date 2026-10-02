@@ -8,6 +8,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Calendar, MapPin, Clock, Ticket, DollarSign, Plus, Image, User } from "lucide-react";
 import { useApiContext } from "@/contexts/ApiIntegrationContext";
 import { useToast } from "@/hooks/use-toast";
+import EventNotifyFields from "./EventNotifyFields";
+import { notifyPayload } from "@/lib/eventNotify";
+import type { EventNotify } from "@/hooks/useApiIntegration";
+
+// New events are announced to every app user unless the admin switches it off.
+const DEFAULT_NOTIFY: EventNotify = { send: true };
 
 interface CreateEventModalProps {
   isOpen: boolean;
@@ -37,6 +43,7 @@ const CreateEventModal = ({ isOpen, onClose, onEventCreated }: CreateEventModalP
   const api = useApiContext();
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
+  const [notify, setNotify] = useState<EventNotify>(DEFAULT_NOTIFY);
   
   const [formData, setFormData] = useState<EventData>({
     name: "",
@@ -95,7 +102,8 @@ const CreateEventModal = ({ isOpen, onClose, onEventCreated }: CreateEventModalP
         totalTickets: Number(formData.totalTickets),
         ticketPrice: Number(formData.ticketPrice),
         status: formData.status || "draft",
-        organiserId: formData.organiserId
+        organiserId: formData.organiserId,
+        notify: notifyPayload(notify)
       };
       
       console.log('📤 Preparing event data for backend:', eventData);
@@ -122,7 +130,8 @@ const CreateEventModal = ({ isOpen, onClose, onEventCreated }: CreateEventModalP
         organiserId: "",
         coverImage: ""
       });
-      
+      setNotify(DEFAULT_NOTIFY);
+
       // Callback to refresh events list
       if (onEventCreated) {
         onEventCreated();
@@ -420,6 +429,17 @@ const CreateEventModal = ({ isOpen, onClose, onEventCreated }: CreateEventModalP
               rows={4}
             />
           </div>
+
+          <EventNotifyFields
+            id="create-notify"
+            value={notify}
+            onChange={setNotify}
+            label="Notify all app users about this event"
+            hint="Sends a push to everyone with the app installed as soon as the event is created."
+            bodyLabel="Message (optional)"
+            titlePlaceholder="🎉 New Event Live!"
+            bodyPlaceholder={`${formData.name || "Event name"} is now live${formData.location ? ` at ${formData.location}` : ""}. Book your tickets now!`}
+          />
 
           {/* Action Buttons */}
           <div className="flex justify-end space-x-4 pt-6">

@@ -8,6 +8,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Calendar, MapPin, Clock, Ticket, DollarSign, Image, User, Save } from "lucide-react";
 import { useApiContext } from "@/contexts/ApiIntegrationContext";
 import { useToast } from "@/hooks/use-toast";
+import EventNotifyFields from "./EventNotifyFields";
+import { notifyPayload } from "@/lib/eventNotify";
+import type { EventNotify } from "@/hooks/useApiIntegration";
+
+// Edits stay silent unless the admin chooses to tell ticket holders.
+const DEFAULT_NOTIFY: EventNotify = { send: false };
 
 interface EditEventModalProps {
   isOpen: boolean;
@@ -36,7 +42,8 @@ const EditEventModal = ({ isOpen, onClose, onEventUpdated, eventData }: EditEven
   const api = useApiContext();
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
-  
+  const [notify, setNotify] = useState<EventNotify>(DEFAULT_NOTIFY);
+
   const [formData, setFormData] = useState<EventFormData>({
     name: "",
     description: "",
@@ -68,6 +75,7 @@ const EditEventModal = ({ isOpen, onClose, onEventUpdated, eventData }: EditEven
         }
       }
 
+      setNotify(DEFAULT_NOTIFY);
       setFormData({
         eventId: eventData.eventId || eventData._id || eventData.id,
         name: eventData.name || "",
@@ -123,7 +131,8 @@ const EditEventModal = ({ isOpen, onClose, onEventUpdated, eventData }: EditEven
         ticketPrice: Number(formData.ticketPrice),
         status: formData.status,
         organizer: formData.organiserId, // Backend expects 'organizer' field
-        coverImage: formData.coverImage
+        coverImage: formData.coverImage,
+        notify: notifyPayload(notify)
       };
 
       console.log('📤 Sending update data to backend:', updateData);
@@ -135,11 +144,23 @@ const EditEventModal = ({ isOpen, onClose, onEventUpdated, eventData }: EditEven
 
       const response = await api.updateEvent(eventId, updateData);
       console.log('✅ Event updated successfully:', response);
-      
-      toast({
-        title: "Success",
-        description: "Event updated successfully",
-      });
+
+      const { notifiedTicketHolders, notificationFailed } =
+        (response as { data?: { notifiedTicketHolders?: number; notificationFailed?: boolean } })?.data || {};
+      if (notificationFailed) {
+        toast({
+          title: "Event updated",
+          description: "The changes were saved, but the notification to ticket holders could not be sent.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Success",
+          description: typeof notifiedTicketHolders === "number"
+            ? `Event updated and ${notifiedTicketHolders} ticket holder${notifiedTicketHolders === 1 ? "" : "s"} notified`
+            : "Event updated successfully",
+        });
+      }
       
       // Callback to refresh events list
       if (onEventUpdated) {
@@ -429,6 +450,17 @@ const EditEventModal = ({ isOpen, onClose, onEventUpdated, eventData }: EditEven
               rows={4}
             />
           </div>
+
+          <EventNotifyFields
+            id="edit-notify"
+            value={notify}
+            onChange={setNotify}
+            label="Notify ticket holders about this change"
+            hint="Leave off for small fixes. When on, everyone with a confirmed ticket gets a push when you save."
+            bodyLabel="What changed? (optional)"
+            titlePlaceholder="📝 Event Updated"
+            bodyPlaceholder="e.g. The venue has moved to Hall B"
+          />
 
           {/* Action Buttons */}
           <div className="flex justify-end space-x-4 pt-6">

@@ -418,6 +418,22 @@ export const CentralizedApi = {
   },
 
   // ===================================================================
+  // EVENT NOTIFICATIONS (admin, per event)
+  // ===================================================================
+
+  eventNotifications: {
+    /** What has gone out for an event, who each push would reach, and its default wording. */
+    get(eventId: string) {
+      return CentralizedApi.get(`/admin/notifications/events/${eventId}`);
+    },
+
+    /** Send now: "announcement" to every app user, "update" to the event's ticket holders. */
+    send(eventId: string, payload: { kind: 'announcement' | 'update'; title?: string; body?: string }) {
+      return CentralizedApi.post(`/admin/notifications/events/${eventId}/send`, payload);
+    },
+  },
+
+  // ===================================================================
   // EVENT ENDPOINTS
   // ===================================================================
 

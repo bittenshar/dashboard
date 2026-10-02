@@ -49,6 +49,14 @@ interface Event {
   coverImage?: string;
 }
 
+// The "notify …" switch from the event create/edit forms. The backend reads it
+// off the event payload and never stores it on the event.
+export interface EventNotify {
+  send: boolean;
+  title?: string;
+  body?: string;
+}
+
 interface Registration {
   registrationId: string;
   eventId: string;
@@ -328,7 +336,7 @@ export const useApiIntegration = () => {
     }
   }, []);
 
-  const createEvent = useCallback(async (eventData: Partial<Event>) => {
+  const createEvent = useCallback(async (eventData: Partial<Event> & { notify?: EventNotify }) => {
     try {
       // Get the token from localStorage
       const token = localStorage.getItem('authToken');
@@ -350,6 +358,7 @@ export const useApiIntegration = () => {
         ticketPrice: Number(eventData.ticketPrice),
         status: eventData.status || 'draft',
         organizerId: eventData.organiserId, // Convert 'organiserId' to 'organizerId' for the backend
+        ...(eventData.notify && { notify: eventData.notify }),
       };
       
       console.log('📤 Sending minimal event data:', minimalEvent);
@@ -374,7 +383,7 @@ export const useApiIntegration = () => {
     }
   }, [fetchEvents]);
 
-  const updateEvent = useCallback(async (eventId: string, updateData: Partial<Event>) => {
+  const updateEvent = useCallback(async (eventId: string, updateData: Partial<Event> & { notify?: EventNotify }) => {
     try {
       const response = await ApiService.patch(`/api/events/${eventId}`, updateData);
       await fetchEvents(); // Refresh the list

@@ -5,11 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Calendar, Users, MapPin, CreditCard, Mail, Phone, Plus, Eye, Edit, Trash, X, Ticket } from "lucide-react";
+import { Calendar, Users, MapPin, CreditCard, Mail, Phone, Plus, Eye, Edit, Trash, X, Ticket, Bell } from "lucide-react";
 import EventAnalytics from "./EventAnalytics";
 import CreateEventModal from "./CreateEventModal";
 import EditEventModal from "./EditEventModal";
 import AdminBookTicketDialog from "./AdminBookTicketDialog";
+import EventNotificationsDialog from "./EventNotificationsDialog";
 import { EventFaceCost, FaceCostSummary, faceCostLine, useFaceUsage } from "./FaceCost";
 import { useApiContext } from "@/contexts/ApiIntegrationContext";
 import { CentralizedApi } from "@/services/centralizedApi";
@@ -31,6 +32,7 @@ const EventManagement = () => {
   const [editingEvent, setEditingEvent] = useState<any>(null);
   // The event an admin is booking a ticket on, while that dialog is open.
   const [bookingEvent, setBookingEvent] = useState<any>(null);
+  const [notificationsEvent, setNotificationsEvent] = useState<{ _id: string; name: string } | null>(null);
   // Real ticket figures per event, from bookings (GET /booking/admin/event-summaries).
   const [summaries, setSummaries] = useState<Record<string, EventSummary>>({});
 
@@ -526,6 +528,21 @@ const EventManagement = () => {
                             <Ticket className="h-4 w-4 mr-2" />
                             Book ticket for a user
                           </Button>
+                          <Button
+                            variant="outline"
+                            size="lg"
+                            className="w-full h-12 border-orange-300 text-orange-700 hover:bg-orange-50 font-medium"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setNotificationsEvent({
+                                _id: currentEvent._id || currentEvent.id || currentEvent.eventId,
+                                name: currentEvent.name,
+                              });
+                            }}
+                          >
+                            <Bell className="h-4 w-4 mr-2" />
+                            Notifications
+                          </Button>
                           <div className="grid grid-cols-2 gap-3">
                             <Button 
                               variant="outline" 
@@ -675,6 +692,13 @@ const EventManagement = () => {
           api.fetchEvents();
           loadSummaries();
         }}
+      />
+
+      {/* Announcement / update pushes for this event */}
+      <EventNotificationsDialog
+        event={notificationsEvent || undefined}
+        open={Boolean(notificationsEvent)}
+        onOpenChange={(open) => !open && setNotificationsEvent(null)}
       />
     </div>
   );
