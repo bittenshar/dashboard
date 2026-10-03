@@ -434,6 +434,39 @@ export const CentralizedApi = {
   },
 
   // ===================================================================
+  // EVENT ANALYTICS (admin, per event — the publisher's event page numbers)
+  // ===================================================================
+
+  eventAnalytics: {
+    /** Headline totals, daily sales, the ticket-type split, inventory and the organiser. */
+    stats(eventId: string) {
+      return CentralizedApi.get(`/admin/event-analytics/${eventId}`);
+    },
+
+    /** One page of the event's bookings, newest first. */
+    orders(eventId: string, page = 1, limit = 50) {
+      return CentralizedApi.get(`/admin/event-analytics/${eventId}/orders?page=${page}&limit=${limit}`);
+    },
+
+    /** The organiser's trackable links for the event, with their clicks. */
+    oneLinks(eventId: string) {
+      return CentralizedApi.get(`/admin/event-analytics/${eventId}/one-links`);
+    },
+
+    /** Every booking the event has had, as a CSV file. */
+    async exportSales(eventId: string) {
+      const response = await fetch(CentralizedApi.buildUrl(`/admin/event-analytics/${eventId}/export-sales`), {
+        headers: CentralizedApi.getAuthHeaders(),
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.message || `HTTP ${response.status}`);
+      }
+      return response.blob();
+    },
+  },
+
+  // ===================================================================
   // EVENT ENDPOINTS
   // ===================================================================
 

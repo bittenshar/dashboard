@@ -1,44 +1,32 @@
-
-import { useState, useEffect } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+/**
+ * One event's analytics: the publisher's event page, for any organiser's
+ * event. The numbers come from the same backend code the publisher uses, so
+ * the two always agree.
+ */
+import { useCallback, useEffect, useState } from "react";
+import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, XAxis, YAxis } from "recharts";
+import {
+  ArrowLeft,
+  Building2,
+  Calendar,
+  Check,
+  Copy,
+  Download,
+  Link2,
+  Loader2,
+  MapPin,
+  RefreshCw,
+  Ticket,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ChartContainer, ChartTooltip } from "@/components/ui/chart";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { 
-  ChartContainer, 
-  ChartTooltip, 
-  ChartTooltipContent,
-  ChartLegend,
-  ChartLegendContent 
-} from "@/components/ui/chart";
-import { 
-  LineChart, 
-  Line, 
-  BarChart, 
-  Bar, 
-  PieChart, 
-  Pie, 
-  Cell, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  ResponsiveContainer,
-  Area,
-  AreaChart
-} from "recharts";
-import { 
-  TrendingUp, 
-  TrendingDown, 
-  Users, 
-  Calendar, 
-  CreditCard, 
-  Clock,
-  MapPin,
-  Target,
-  ArrowLeft,
-  Loader2
-} from "lucide-react";
-import { useApiContext } from "@/contexts/ApiIntegrationContext";
+import { useToast } from "@/hooks/use-toast";
+import { CentralizedApi } from "@/services/centralizedApi";
 
 interface EventAnalyticsProps {
   eventId: string;
@@ -46,510 +34,661 @@ interface EventAnalyticsProps {
   onClose: () => void;
 }
 
-interface AnalyticsData {
-  totalRevenue: number;
-  ticketsSold: number;
-  conversionRate: number;
-  avgTicketPrice: number;
-  salesData: Array<{
-    date: string;
-    tickets: number;
-    revenue: number;
-    day: string;
-  }>;
-  hourlyData: Array<{
-    hour: string;
-    sales: number;
-  }>;
-  demographicsData: Array<{
+interface EventStats {
+  event: {
+    id: string;
     name: string;
-    value: number;
-    fill: string;
+    date?: string;
+    location?: string;
+    coverImage?: string;
+    status?: string;
+    eventType?: string;
+  };
+  organizer: { id: string; name?: string; email?: string; phone?: string } | null;
+  totals: { orders: number; tickets: number; amount: number; capacity: number; sellThrough: number; admitted: number };
+  byTicketType: Array<{ _id: string; tickets: number; amount: number; orders: number }>;
+  daily: Array<{ date: string; tickets: number; amount: number }>;
+  inventory: Array<{
+    seatingId: string;
+    seatType: string;
+    price: number;
+    totalSeats: number;
+    seatsSold: number;
+    lockedSeats: number;
+    remaining: number;
+    status?: string;
+    isActive?: boolean;
   }>;
-  locationData: Array<{
-    city: string;
-    attendees: number;
-    percentage: number;
-  }>;
-  checkInRate: number;
-  noShowRate: number;
-  satisfactionScore: number;
 }
 
+interface Order {
+  id: string;
+  reference?: string;
+  seatType: string;
+  quantity: number;
+  totalPrice: number;
+  status: string;
+  createdAt?: string;
+  buyer: { name?: string; phone?: string; email?: string } | null;
+  admitted: number;
+  attendeeCount: number;
+}
+
+interface OrdersPage {
+  pagination: { page: number; limit: number; total: number; pages: number };
+  orders: Order[];
+}
+
+interface OneLink {
+  _id: string;
+  code: string;
+  title?: string;
+  url: string;
+  source?: string | null;
+  medium?: string | null;
+  campaign?: string | null;
+  clicks: number;
+}
+
+const ORDERS_PER_PAGE = 50;
+
+/* ------------------------------------------------------------------ *
+ * Formatting — the same rules the publisher uses
+ * ------------------------------------------------------------------ */
+
+const inr = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
+const money = (value?: number) => inr.format(Number(value || 0));
+
+/** 1.2L / 45.3K — for stat tiles where the exact rupee isn't the point. */
+const compactMoney = (value?: number) => {
+  const n = Number(value || 0);
+  if (n >= 10000000) return `₹${(n / 10000000).toFixed(n >= 100000000 ? 0 : 2)}Cr`;
+  if (n >= 100000) return `₹${(n / 100000).toFixed(n >= 1000000 ? 1 : 2)}L`;
+  if (n >= 1000) return `₹${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}K`;
+  return inr.format(n);
+};
+
+const count = (value?: number) => new Intl.NumberFormat("en-IN").format(Number(value || 0));
+const percent = (value?: number) => `${Number(value || 0).toFixed(1)}%`;
+
+const dateFmt = new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", year: "numeric" });
+const shortDateFmt = new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short" });
+const timeFmt = new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit", hour12: true });
+const formatDate = (value?: string) => (value ? dateFmt.format(new Date(value)) : "—");
+const formatDateTime = (value?: string) =>
+  value ? `${dateFmt.format(new Date(value))}, ${timeFmt.format(new Date(value))}` : "—";
+
+/** "fast_filling" → "Fast Filling". */
+const humanize = (value?: string) =>
+  String(value || "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+
+const TONES = {
+  green: "border-green-200 bg-green-50 text-green-700",
+  blue: "border-blue-200 bg-blue-50 text-blue-700",
+  amber: "border-amber-200 bg-amber-50 text-amber-700",
+  red: "border-red-200 bg-red-50 text-red-700",
+  gray: "border-gray-200 bg-gray-50 text-gray-600",
+};
+
+// Event, ticket-type and order statuses share one palette.
+const STATUS_TONE: Record<string, keyof typeof TONES> = {
+  active: "green",
+  upcoming: "blue",
+  completed: "gray",
+  cancelled: "red",
+  available: "green",
+  fast_filling: "amber",
+  sold_out: "red",
+  confirmed: "green",
+  used: "blue",
+  refunded: "amber",
+};
+
+const StatusBadge = ({ status }: { status?: string }) => (
+  <Badge variant="outline" className={TONES[STATUS_TONE[status || ""] || "gray"]}>
+    {humanize(status) || "—"}
+  </Badge>
+);
+
+/* ------------------------------------------------------------------ */
+
 const EventAnalytics = ({ eventId, eventName, onClose }: EventAnalyticsProps) => {
-  const api = useApiContext();
-  const [activeTab, setActiveTab] = useState("overview");
-  const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null);
+  const { toast } = useToast();
+  const [tab, setTab] = useState("overview");
+  const [reloadKey, setReloadKey] = useState(0);
+
+  const [stats, setStats] = useState<EventStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch analytics data for the specific event
+  const [links, setLinks] = useState<OneLink[] | null>(null);
+  const [linksError, setLinksError] = useState<string | null>(null);
+
+  const [orders, setOrders] = useState<OrdersPage | null>(null);
+  const [ordersPage, setOrdersPage] = useState(1);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [ordersError, setOrdersError] = useState<string | null>(null);
+
+  const [exporting, setExporting] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+
   useEffect(() => {
-    const fetchEventAnalytics = async () => {
-      setLoading(true);
-      setError(null);
-      
-      try {
-        // Get event details
-        const eventsArray = Array.isArray(api.events) ? api.events : [];
-        const currentEvent = eventsArray.find((e, index) => {
-          const eventId = e.eventId || (e as any)._id || (e as any).id || `event-${index}`;
-          return eventId === eventId;
-        });
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    (CentralizedApi.eventAnalytics.stats(eventId) as Promise<{ data: EventStats }>)
+      .then((res) => !cancelled && setStats(res.data))
+      .catch((err) => !cancelled && setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => !cancelled && setLoading(false));
 
-        if (!currentEvent) {
-          throw new Error('Event not found');
-        }
+    setLinksError(null);
+    (CentralizedApi.eventAnalytics.oneLinks(eventId) as Promise<{ data: { links: OneLink[] } }>)
+      .then((res) => !cancelled && setLinks(res.data.links))
+      .catch((err) => !cancelled && setLinksError(err instanceof Error ? err.message : String(err)));
 
-        // Get registrations for this event
-        const eventRegistrations = api.registrations?.filter(
-          registration => registration.eventId === eventId
-        ) || [];
-
-        // Get users for these registrations
-        const registeredUsers = eventRegistrations.map(registration => {
-          const user = api.users?.find(u => 
-            (u._id || u.id) === registration.userId
-          );
-          return { registration, user };
-        }).filter(item => item.user);
-
-        // Calculate analytics data
-        const totalTickets = currentEvent.totalTickets || 0;
-        const ticketsSold = eventRegistrations.length;
-        const ticketPrice = currentEvent.ticketPrice || 0;
-        const totalRevenue = ticketsSold * ticketPrice;
-        const conversionRate = totalTickets > 0 ? (ticketsSold / totalTickets) * 100 : 0;
-        const avgTicketPrice = ticketsSold > 0 ? totalRevenue / ticketsSold : 0;
-
-        // Calculate check-in rate
-        const checkedInCount = eventRegistrations.filter(r => 
-          (r as any).checkInStatus || r.checkInTime
-        ).length;
-        const checkInRate = ticketsSold > 0 ? (checkedInCount / ticketsSold) * 100 : 0;
-        const noShowRate = 100 - checkInRate;
-
-        // Generate sales data (last 7 days)
-        const salesData = Array.from({ length: 7 }, (_, i) => {
-          const date = new Date();
-          date.setDate(date.getDate() - (6 - i));
-          const dayTickets = Math.floor(Math.random() * 50) + 10; // Mock data
-          return {
-            date: date.toISOString().split('T')[0],
-            tickets: dayTickets,
-            revenue: dayTickets * ticketPrice,
-            day: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-          };
-        });
-
-        // Generate hourly data
-        const hourlyData = Array.from({ length: 8 }, (_, i) => ({
-          hour: `${String(i * 3).padStart(2, '0')}:00`,
-          sales: Math.floor(Math.random() * 30) + 5
-        }));
-
-        // Generate demographics data
-        const demographicsData = [
-          { name: "18-24", value: Math.floor(Math.random() * 200) + 50, fill: "#8884d8" },
-          { name: "25-34", value: Math.floor(Math.random() * 300) + 100, fill: "#82ca9d" },
-          { name: "35-44", value: Math.floor(Math.random() * 150) + 50, fill: "#ffc658" },
-          { name: "45-54", value: Math.floor(Math.random() * 100) + 30, fill: "#ff7300" },
-          { name: "55+", value: Math.floor(Math.random() * 50) + 10, fill: "#8dd1e1" },
-        ];
-
-        // Generate location data
-        const cities = ["Mumbai", "Delhi", "Bangalore", "Chennai", "Others"];
-        const locationData = cities.map((city, index) => ({
-          city,
-          attendees: Math.floor(Math.random() * 200) + 50,
-          percentage: Math.floor(Math.random() * 30) + 10
-        }));
-
-        const analytics: AnalyticsData = {
-          totalRevenue,
-          ticketsSold,
-          conversionRate,
-          avgTicketPrice,
-          salesData,
-          hourlyData,
-          demographicsData,
-          locationData,
-          checkInRate,
-          noShowRate,
-          satisfactionScore: 4.7
-        };
-
-        setAnalyticsData(analytics);
-      } catch (err) {
-        console.error('Failed to fetch event analytics:', err);
-        setError(err instanceof Error ? err.message : 'Failed to load analytics');
-      } finally {
-        setLoading(false);
-      }
+    return () => {
+      cancelled = true;
     };
+  }, [eventId, reloadKey]);
 
-    fetchEventAnalytics();
-  }, [eventId, api.events, api.registrations, api.users]);
+  // Like the publisher, orders load once their tab is opened.
+  useEffect(() => {
+    if (tab !== "orders") return;
+    let cancelled = false;
+    setOrdersLoading(true);
+    setOrdersError(null);
+    (CentralizedApi.eventAnalytics.orders(eventId, ordersPage, ORDERS_PER_PAGE) as Promise<{ data: OrdersPage }>)
+      .then((res) => !cancelled && setOrders(res.data))
+      .catch((err) => !cancelled && setOrdersError(err instanceof Error ? err.message : String(err)))
+      .finally(() => !cancelled && setOrdersLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, eventId, ordersPage, reloadKey]);
 
-  const chartConfig = {
-    tickets: {
-      label: "Tickets",
-      color: "#3b82f6",
-    },
-    revenue: {
-      label: "Revenue (₹)",
-      color: "#10b981",
-    },
-    sales: {
-      label: "Sales",
-      color: "#8b5cf6",
-    },
+  const refresh = useCallback(() => setReloadKey((k) => k + 1), []);
+
+  const exportCsv = async () => {
+    setExporting(true);
+    try {
+      const blob = await CentralizedApi.eventAnalytics.exportSales(eventId);
+      const name = (stats?.event.name || eventName || "event").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${name}-sales-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      toast({
+        title: "Couldn't export sales",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setExporting(false);
+    }
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR'
-    }).format(amount);
+  const copyLink = async (link: OneLink) => {
+    try {
+      await navigator.clipboard.writeText(link.url);
+      setCopied(link._id);
+      setTimeout(() => setCopied((c) => (c === link._id ? null : c)), 1500);
+    } catch {
+      toast({ title: "Couldn't copy the link", description: link.url });
+    }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="flex items-center space-x-2">
-          <Loader2 className="h-6 w-6 animate-spin" />
-          <span>Loading analytics...</span>
+  const header = (
+    <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="flex items-center space-x-4">
+        <Button variant="outline" onClick={onClose} className="h-10 w-10 p-0" aria-label="Back to events">
+          <ArrowLeft className="h-4 w-4" />
+        </Button>
+        <div>
+          <h2 className="text-3xl font-bold text-gray-900">Event Analytics</h2>
+          <p className="text-gray-600">{stats?.event.name || eventName}</p>
         </div>
+      </div>
+      <div className="flex gap-2">
+        <Button variant="outline" onClick={refresh} disabled={loading}>
+          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+          Refresh
+        </Button>
+        <Button onClick={exportCsv} disabled={exporting || !stats}>
+          {exporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+          Export CSV
+        </Button>
+      </div>
+    </div>
+  );
+
+  if (loading && !stats) {
+    return (
+      <div className="space-y-6">
+        {header}
+        <Skeleton className="h-32 w-full rounded-xl" />
+        <div className="grid grid-cols-2 gap-6 xl:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-28 rounded-xl" />
+          ))}
+        </div>
+        <Skeleton className="h-80 w-full rounded-xl" />
       </div>
     );
   }
 
-  if (error) {
+  if (error || !stats) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-center">
-          <div className="text-red-500 mb-2">Error loading analytics</div>
-          <div className="text-sm text-gray-600">{error}</div>
-          <Button onClick={() => window.location.reload()} className="mt-4">
-            Retry
-          </Button>
-        </div>
+      <div className="space-y-6">
+        {header}
+        <Card>
+          <CardContent className="py-12 text-center">
+            <p className="mb-2 font-medium text-red-600">Couldn't load this event's analytics</p>
+            <p className="text-sm text-gray-600">{error || "No data came back."}</p>
+            <Button onClick={refresh} className="mt-4">
+              Try again
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     );
   }
 
-  if (!analyticsData) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-center text-gray-500">
-          No analytics data available
-        </div>
-      </div>
-    );
-  }
+  const { event, organizer, totals } = stats;
+  const sold = Math.min(Math.max(totals.sellThrough || 0, 0), 100);
+  const maxTypeTickets = Math.max(...stats.byTicketType.map((t) => t.tickets), 1);
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-4">
-          <Button variant="outline" onClick={onClose} className="h-10 w-10 p-0">
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <div>
-            <h2 className="text-3xl font-bold text-gray-900">Event Analytics</h2>
-            <p className="text-gray-600">{eventName}</p>
+      {header}
+
+      {/* Event */}
+      <Card className="overflow-hidden">
+        <CardContent className="flex flex-col gap-5 p-5 sm:flex-row">
+          {event.coverImage ? (
+            <img src={event.coverImage} alt="" className="h-32 w-full shrink-0 rounded-lg bg-gray-100 object-cover sm:w-56" />
+          ) : (
+            <div className="grid h-32 w-full shrink-0 place-items-center rounded-lg bg-violet-50 text-violet-600 sm:w-56">
+              <Ticket className="h-7 w-7" />
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <StatusBadge status={event.status} />
+              {event.eventType && <Badge variant="outline">{humanize(event.eventType)}</Badge>}
+            </div>
+            <h3 className="text-xl font-semibold leading-snug text-gray-900">{event.name}</h3>
+            <div className="mt-2.5 flex flex-wrap gap-x-5 gap-y-1.5 text-sm text-gray-600">
+              <span className="flex items-center gap-1.5">
+                <Calendar className="h-4 w-4" /> {formatDate(event.date)}
+              </span>
+              {event.location && (
+                <span className="flex items-center gap-1.5">
+                  <MapPin className="h-4 w-4" /> {event.location}
+                </span>
+              )}
+              <span className="flex items-center gap-1.5">
+                <Building2 className="h-4 w-4" />
+                {organizer ? (
+                  <>
+                    {organizer.name}
+                    {(organizer.phone || organizer.email) && (
+                      <span className="text-gray-400">· {organizer.phone || organizer.email}</span>
+                    )}
+                  </>
+                ) : (
+                  "Organiser not found"
+                )}
+              </span>
+            </div>
           </div>
-        </div>
-        <Badge className="bg-blue-100 text-blue-800 px-4 py-2">
-          <Target className="h-4 w-4 mr-2" />
-          Live Analytics
-        </Badge>
+        </CardContent>
+      </Card>
+
+      {/* Headline numbers */}
+      <div className="grid grid-cols-2 gap-6 xl:grid-cols-4">
+        {[
+          { label: "Gross sales", value: compactMoney(totals.amount), sub: `${count(totals.orders)} orders`, tone: "blue" },
+          { label: "Tickets sold", value: count(totals.tickets), sub: `of ${count(totals.capacity)}`, tone: "green" },
+          { label: "Sell-through", value: percent(totals.sellThrough), sub: "of capacity", tone: "purple" },
+          { label: "Checked in", value: count(totals.admitted), sub: "at the gate", tone: "orange" },
+        ].map((s) => (
+          <Card
+            key={s.label}
+            className={
+              {
+                blue: "border-blue-200 bg-gradient-to-br from-blue-50 to-blue-100",
+                green: "border-green-200 bg-gradient-to-br from-green-50 to-green-100",
+                purple: "border-purple-200 bg-gradient-to-br from-purple-50 to-purple-100",
+                orange: "border-orange-200 bg-gradient-to-br from-orange-50 to-orange-100",
+              }[s.tone]
+            }
+          >
+            <CardContent className="p-6">
+              <p className="text-sm font-medium text-gray-600">{s.label}</p>
+              <p className="mt-1 text-2xl font-bold tabular-nums text-gray-900">{s.value}</p>
+              <p className="mt-1 text-sm text-gray-500">{s.sub}</p>
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
-      {/* Key Metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <Card className="bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200">
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-blue-600">Total Revenue</p>
-                <p className="text-2xl font-bold text-blue-900">{formatCurrency(analyticsData.totalRevenue)}</p>
-                <div className="flex items-center mt-2">
-                  <TrendingUp className="h-4 w-4 text-green-500 mr-1" />
-                  <span className="text-sm text-green-600">+12.5%</span>
-                </div>
-              </div>
-              <CreditCard className="h-8 w-8 text-blue-600" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-gradient-to-br from-green-50 to-green-100 border-green-200">
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-green-600">Tickets Sold</p>
-                <p className="text-2xl font-bold text-green-900">{analyticsData.ticketsSold}</p>
-                <div className="flex items-center mt-2">
-                  <TrendingUp className="h-4 w-4 text-green-500 mr-1" />
-                  <span className="text-sm text-green-600">+8.2%</span>
-                </div>
-              </div>
-              <Users className="h-8 w-8 text-green-600" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-gradient-to-br from-purple-50 to-purple-100 border-purple-200">
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-purple-600">Conversion Rate</p>
-                <p className="text-2xl font-bold text-purple-900">{analyticsData.conversionRate.toFixed(1)}%</p>
-                <div className="flex items-center mt-2">
-                  <TrendingDown className="h-4 w-4 text-red-500 mr-1" />
-                  <span className="text-sm text-red-600">-2.1%</span>
-                </div>
-              </div>
-              <Target className="h-8 w-8 text-purple-600" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-gradient-to-br from-orange-50 to-orange-100 border-orange-200">
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-orange-600">Avg. Ticket Price</p>
-                <p className="text-2xl font-bold text-orange-900">{formatCurrency(analyticsData.avgTicketPrice)}</p>
-                <div className="flex items-center mt-2">
-                  <TrendingUp className="h-4 w-4 text-green-500 mr-1" />
-                  <span className="text-sm text-green-600">+5.0%</span>
-                </div>
-              </div>
-              <Calendar className="h-8 w-8 text-orange-600" />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Analytics Tabs */}
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-        <TabsList className="grid w-full grid-cols-4 bg-white/70 backdrop-blur-sm border border-gray-200 shadow-sm">
+      <Tabs value={tab} onValueChange={setTab} className="space-y-6">
+        <TabsList className="grid w-full grid-cols-4 border border-gray-200 bg-white/70 shadow-sm backdrop-blur-sm">
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="sales">Sales Trends</TabsTrigger>
-          <TabsTrigger value="demographics">Demographics</TabsTrigger>
-          <TabsTrigger value="performance">Performance</TabsTrigger>
+          <TabsTrigger value="inventory">Inventory ({stats.inventory.length})</TabsTrigger>
+          <TabsTrigger value="orders">Orders ({count(totals.orders)})</TabsTrigger>
+          <TabsTrigger value="links">One-links{links ? ` (${links.length})` : ""}</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="overview" className="space-y-6">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Card>
+        {/* ---------------- Overview ---------------- */}
+        <TabsContent value="overview">
+          <div className="grid gap-6 lg:grid-cols-3">
+            <Card className="lg:col-span-2">
               <CardHeader>
-                <CardTitle>Revenue Trend</CardTitle>
-                <CardDescription>Daily revenue over the past week</CardDescription>
+                <CardTitle>Sales over time</CardTitle>
+                <CardDescription>Since this event went live</CardDescription>
               </CardHeader>
               <CardContent>
-                <ChartContainer config={chartConfig} className="h-[300px]">
-                  <AreaChart data={analyticsData.salesData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="day" />
-                    <YAxis />
-                    <ChartTooltip content={<ChartTooltipContent />} />
-                    <Area 
-                      type="monotone" 
-                      dataKey="revenue" 
-                      stroke="#10b981" 
-                      fill="#10b981" 
-                      fillOpacity={0.2}
-                    />
-                  </AreaChart>
-                </ChartContainer>
+                {stats.daily.length === 0 ? (
+                  <p className="py-24 text-center text-sm text-gray-500">No sales yet.</p>
+                ) : (
+                  <ChartContainer config={{ amount: { label: "Sales", color: "#7c3aed" } }} className="h-[300px] w-full">
+                    <AreaChart data={stats.daily} margin={{ left: 4, right: 12, top: 8 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                      <XAxis
+                        dataKey="date"
+                        tickFormatter={(d: string) => shortDateFmt.format(new Date(d))}
+                        tickLine={false}
+                        axisLine={false}
+                        minTickGap={24}
+                      />
+                      <YAxis tickFormatter={(v: number) => compactMoney(v)} tickLine={false} axisLine={false} width={64} />
+                      <ChartTooltip
+                        content={({ active, payload, label }) =>
+                          active && payload?.length ? (
+                            <div className="rounded-lg border bg-white px-3 py-2 text-xs shadow-lg">
+                              <p className="font-medium text-gray-900">{formatDate(String(label))}</p>
+                              <p className="text-gray-600">
+                                {money(payload[0].payload.amount)} · {count(payload[0].payload.tickets)} tickets
+                              </p>
+                            </div>
+                          ) : null
+                        }
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="amount"
+                        stroke="var(--color-amount)"
+                        fill="var(--color-amount)"
+                        fillOpacity={0.15}
+                        strokeWidth={2}
+                        dot={stats.daily.length === 1}
+                      />
+                    </AreaChart>
+                  </ChartContainer>
+                )}
               </CardContent>
             </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Ticket Sales</CardTitle>
-                <CardDescription>Daily ticket sales progression</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ChartContainer config={chartConfig} className="h-[300px]">
-                  <LineChart data={analyticsData.salesData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="day" />
-                    <YAxis />
-                    <ChartTooltip content={<ChartTooltipContent />} />
-                    <Line 
-                      type="monotone" 
-                      dataKey="tickets" 
-                      stroke="#3b82f6" 
-                      strokeWidth={3}
-                    />
-                  </LineChart>
-                </ChartContainer>
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
-
-        <TabsContent value="sales" className="space-y-6">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Hourly Sales Pattern</CardTitle>
-                <CardDescription>Sales distribution throughout the day</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ChartContainer config={chartConfig} className="h-[300px]">
-                  <BarChart data={analyticsData.hourlyData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="hour" />
-                    <YAxis />
-                    <ChartTooltip content={<ChartTooltipContent />} />
-                    <Bar dataKey="sales" fill="#8b5cf6" />
-                  </BarChart>
-                </ChartContainer>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Sales Velocity</CardTitle>
-                <CardDescription>Rate of ticket sales over time</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <span className="text-sm font-medium">Peak Sales Hour</span>
-                  <Badge>18:00 - 19:00</Badge>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm font-medium">Average Sales/Hour</span>
-                  <Badge variant="outline">58 tickets</Badge>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm font-medium">Best Sales Day</span>
-                  <Badge className="bg-green-100 text-green-800">Saturday</Badge>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm font-medium">Sales Velocity</span>
-                  <Badge className="bg-blue-100 text-blue-800">+15.3%</Badge>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
-
-        <TabsContent value="demographics" className="space-y-6">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Age Distribution</CardTitle>
-                <CardDescription>Attendee age groups breakdown</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ChartContainer config={chartConfig} className="h-[300px]">
-                  <PieChart>
-                    <Pie
-                      data={analyticsData.demographicsData}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                      outerRadius={80}
-                      fill="#8884d8"
-                      dataKey="value"
-                    >
-                      {analyticsData.demographicsData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.fill} />
-                      ))}
-                    </Pie>
-                    <ChartTooltip content={<ChartTooltipContent />} />
-                  </PieChart>
-                </ChartContainer>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Geographic Distribution</CardTitle>
-                <CardDescription>Attendees by city</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {analyticsData.locationData.map((location, index) => (
-                  <div key={index} className="flex items-center justify-between">
-                    <div className="flex items-center space-x-3">
-                      <MapPin className="h-4 w-4 text-gray-500" />
-                      <span className="font-medium">{location.city}</span>
-                    </div>
-                    <div className="flex items-center space-x-3">
-                      <div className="w-20 bg-gray-200 rounded-full h-2">
-                        <div 
-                          className="bg-blue-600 h-2 rounded-full" 
-                          style={{ width: `${location.percentage}%` }}
-                        ></div>
+            <div className="space-y-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Sell-through</CardTitle>
+                </CardHeader>
+                <CardContent className="grid place-items-center pb-8">
+                  <div className="relative h-36 w-36">
+                    <PieChart width={144} height={144}>
+                      <Pie
+                        data={[{ value: sold }, { value: 100 - sold }]}
+                        dataKey="value"
+                        innerRadius={54}
+                        outerRadius={66}
+                        startAngle={90}
+                        endAngle={-270}
+                        stroke="none"
+                        isAnimationActive={false}
+                      >
+                        <Cell fill="#7c3aed" />
+                        <Cell fill="#ede9fe" />
+                      </Pie>
+                    </PieChart>
+                    <div className="absolute inset-0 grid place-items-center text-center">
+                      <div>
+                        <p className="text-2xl font-bold tabular-nums text-gray-900">{percent(totals.sellThrough)}</p>
+                        <p className="text-xs text-gray-500">sold</p>
                       </div>
-                      <span className="text-sm font-medium w-12 text-right">
-                        {location.attendees}
-                      </span>
                     </div>
                   </div>
-                ))}
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>By ticket type</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {stats.byTicketType.length === 0 ? (
+                    <p className="text-sm text-gray-500">No tickets sold yet.</p>
+                  ) : (
+                    <ul className="space-y-3">
+                      {stats.byTicketType.map((t) => (
+                        <li key={t._id}>
+                          <div className="mb-1 flex items-baseline justify-between gap-3 text-sm">
+                            <span className="truncate font-medium text-gray-700">{t._id}</span>
+                            <span className="shrink-0 tabular-nums">
+                              <span className="font-semibold text-gray-900">{count(t.tickets)}</span>
+                              <span className="text-gray-500"> · {money(t.amount)}</span>
+                            </span>
+                          </div>
+                          <div className="h-2 rounded-full bg-violet-50">
+                            <div
+                              className="h-2 rounded-full bg-violet-500"
+                              style={{ width: `${(t.tickets / maxTypeTickets) * 100}%` }}
+                            />
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
           </div>
         </TabsContent>
 
-        <TabsContent value="performance" className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Check-in Rate</CardTitle>
-              </CardHeader>
-              <CardContent className="text-center">
-                <div className="text-3xl font-bold text-green-600 mb-2">{analyticsData.checkInRate.toFixed(1)}%</div>
-                <p className="text-sm text-gray-600">of ticket holders checked in</p>
-                <div className="mt-4">
-                  <div className="w-full bg-gray-200 rounded-full h-3">
-                    <div className="bg-green-600 h-3 rounded-full" style={{ width: `${analyticsData.checkInRate}%` }}></div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+        {/* ---------------- Inventory ---------------- */}
+        <TabsContent value="inventory">
+          <Card>
+            <CardHeader>
+              <CardTitle>Ticket inventory</CardTitle>
+              <CardDescription>What's left, by type</CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              {stats.inventory.length === 0 ? (
+                <p className="px-6 pb-8 text-sm text-gray-500">This event has no ticket types.</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Ticket type</TableHead>
+                      <TableHead className="text-right">Price</TableHead>
+                      <TableHead className="text-right">Sold</TableHead>
+                      <TableHead className="text-right">Held</TableHead>
+                      <TableHead className="text-right">Left</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {stats.inventory.map((row) => (
+                      <TableRow key={row.seatingId}>
+                        <TableCell className="font-medium text-gray-900">{row.seatType}</TableCell>
+                        <TableCell className="text-right tabular-nums">{money(row.price)}</TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {count(row.seatsSold)}
+                          <span className="text-gray-400"> / {count(row.totalSeats)}</span>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-gray-500">{count(row.lockedSeats)}</TableCell>
+                        <TableCell className="text-right font-medium tabular-nums text-gray-900">{count(row.remaining)}</TableCell>
+                        <TableCell>
+                          <StatusBadge status={row.status} />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>No-show Rate</CardTitle>
-              </CardHeader>
-              <CardContent className="text-center">
-                <div className="text-3xl font-bold text-red-600 mb-2">{analyticsData.noShowRate.toFixed(1)}%</div>
-                <p className="text-sm text-gray-600">tickets not used</p>
-                <div className="mt-4">
-                  <div className="w-full bg-gray-200 rounded-full h-3">
-                    <div className="bg-red-600 h-3 rounded-full" style={{ width: `${analyticsData.noShowRate}%` }}></div>
-                  </div>
+        {/* ---------------- Orders ---------------- */}
+        <TabsContent value="orders">
+          <Card>
+            <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
+              <div className="space-y-1.5">
+                <CardTitle>Orders</CardTitle>
+                <CardDescription>Every ticket bought for this event</CardDescription>
+              </div>
+              <Button variant="outline" size="sm" onClick={exportCsv} disabled={exporting}>
+                <Download className="mr-2 h-4 w-4" /> Export CSV
+              </Button>
+            </CardHeader>
+            <CardContent className="p-0">
+              {ordersError ? (
+                <div className="px-6 pb-8 text-sm">
+                  <p className="text-red-600">Couldn't load orders: {ordersError}</p>
+                  <Button variant="outline" size="sm" className="mt-3" onClick={refresh}>
+                    Try again
+                  </Button>
                 </div>
-              </CardContent>
-            </Card>
+              ) : ordersLoading && !orders ? (
+                <div className="flex items-center gap-2 px-6 pb-8 text-sm text-gray-500">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Loading orders…
+                </div>
+              ) : !orders || orders.orders.length === 0 ? (
+                <p className="px-6 pb-8 text-sm text-gray-500">No orders yet. Sales show up here the moment someone buys.</p>
+              ) : (
+                <>
+                  <Table className={ordersLoading ? "opacity-60" : undefined}>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Reference</TableHead>
+                        <TableHead>Buyer</TableHead>
+                        <TableHead>Ticket</TableHead>
+                        <TableHead className="text-right">Qty</TableHead>
+                        <TableHead className="text-right">Amount</TableHead>
+                        <TableHead className="text-right">Entry</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Booked</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {orders.orders.map((o) => (
+                        <TableRow key={o.id}>
+                          <TableCell className="font-medium tabular-nums text-gray-900">{o.reference || "—"}</TableCell>
+                          <TableCell>
+                            <p className="text-gray-900">{o.buyer?.name || "—"}</p>
+                            <p className="text-xs text-gray-500">{o.buyer?.phone || o.buyer?.email || ""}</p>
+                          </TableCell>
+                          <TableCell>{o.seatType}</TableCell>
+                          <TableCell className="text-right tabular-nums">{count(o.quantity)}</TableCell>
+                          <TableCell className="text-right font-medium tabular-nums text-gray-900">{money(o.totalPrice)}</TableCell>
+                          <TableCell className={`text-right tabular-nums ${o.admitted > 0 ? "text-green-600" : "text-gray-400"}`}>
+                            {count(o.admitted)}/{count(o.attendeeCount)}
+                          </TableCell>
+                          <TableCell>
+                            <StatusBadge status={o.status} />
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap text-gray-500">{formatDateTime(o.createdAt)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                  {orders.pagination.pages > 1 && (
+                    <div className="flex items-center justify-between gap-4 border-t px-4 py-3 text-sm text-gray-600">
+                      <span>
+                        {count((orders.pagination.page - 1) * orders.pagination.limit + 1)}–
+                        {count(Math.min(orders.pagination.page * orders.pagination.limit, orders.pagination.total))} of{" "}
+                        {count(orders.pagination.total)}
+                      </span>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={ordersLoading || orders.pagination.page <= 1}
+                          onClick={() => setOrdersPage((p) => p - 1)}
+                        >
+                          Previous
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={ordersLoading || orders.pagination.page >= orders.pagination.pages}
+                          onClick={() => setOrdersPage((p) => p + 1)}
+                        >
+                          Next
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Satisfaction Score</CardTitle>
-              </CardHeader>
-              <CardContent className="text-center">
-                <div className="text-3xl font-bold text-blue-600 mb-2">{analyticsData.satisfactionScore}/5</div>
-                <p className="text-sm text-gray-600">average rating</p>
-                <div className="mt-4 flex justify-center space-x-1">
-                  {[1, 2, 3, 4, 5].map((star) => (
-                    <div 
-                      key={star} 
-                      className={`h-4 w-4 ${star <= Math.floor(analyticsData.satisfactionScore) ? 'bg-yellow-400' : 'bg-gray-300'} rounded-sm`}
-                    />
+        {/* ---------------- One-links ---------------- */}
+        <TabsContent value="links">
+          <Card>
+            <CardHeader>
+              <CardTitle>One-links</CardTitle>
+              <CardDescription>The organiser's trackable links for this event, and how often each was opened</CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              {linksError ? (
+                <p className="px-6 pb-8 text-sm text-red-600">Couldn't load one-links: {linksError}</p>
+              ) : !links ? (
+                <div className="flex items-center gap-2 px-6 pb-8 text-sm text-gray-500">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Loading one-links…
+                </div>
+              ) : links.length === 0 ? (
+                <div className="px-6 pb-8 text-sm text-gray-500">
+                  <Link2 className="mb-2 h-5 w-5 text-gray-400" />
+                  No one-links yet. Organisers create them in the publisher, one per channel, to see which one sells.
+                </div>
+              ) : (
+                <ul className="divide-y border-t">
+                  {links.map((l) => (
+                    <li key={l._id} className="flex items-center gap-4 px-6 py-4">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-gray-900">{l.title || l.code}</p>
+                        <p className="mt-0.5 truncate text-sm text-violet-600">{l.url}</p>
+                        {(l.source || l.medium || l.campaign) && (
+                          <p className="mt-1 text-xs text-gray-500">
+                            {[l.source, l.medium, l.campaign].filter(Boolean).join(" · ")}
+                          </p>
+                        )}
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className="text-base font-semibold tabular-nums text-gray-900">{count(l.clicks)}</p>
+                        <p className="text-xs text-gray-500">clicks</p>
+                      </div>
+                      <Button variant="outline" size="sm" onClick={() => copyLink(l)} aria-label="Copy link">
+                        {copied === l._id ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                      </Button>
+                    </li>
                   ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+                </ul>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
     </div>
