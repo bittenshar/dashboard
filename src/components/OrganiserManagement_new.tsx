@@ -5,14 +5,32 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Building2, Mail, Phone, Globe, MapPin, Calendar, DollarSign, Plus, Edit, Trash, Eye, Briefcase, User, TrendingUp, Activity, Search, Filter, Trash2 } from "lucide-react";
+import { Building2, Mail, Phone, Globe, MapPin, Calendar, DollarSign, Plus, Edit, Trash, Eye, Briefcase, User, TrendingUp, Activity, Search, Filter, Trash2, RotateCcw } from "lucide-react";
 import CreateOrganiserModal from "./CreateOrganiserModal";
 import { useApiContext } from "@/contexts/ApiIntegrationContext";
 import { useToast } from "@/hooks/use-toast";
+import { CentralizedApi } from "@/services/centralizedApi";
+
+interface DeletedOrganiser {
+  _id: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  deletedAt: string;
+  recoverableUntil: string;
+}
+
+const dateTime = new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true });
+const daysLeft = (until: string) => Math.max(Math.ceil((new Date(until).getTime() - Date.now()) / 86400000), 0);
 
 const OrganiserManagement = () => {
   const api = useApiContext();
   const { toast } = useToast();
+  // null until the backend answers; stays null on a backend without recovery,
+  // where a delete is still permanent and the page must not promise otherwise.
+  const [deletedOrganisers, setDeletedOrganisers] = useState<DeletedOrganiser[] | null>(null);
+  const [recoveryDays, setRecoveryDays] = useState(7);
+  const [restoring, setRestoring] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [sortBy, setSortBy] = useState("name");
@@ -28,7 +46,18 @@ const OrganiserManagement = () => {
       user: !!localStorage.getItem('admin_user')
     });
     api.fetchOrganizers();
+    loadDeleted();
   }, []); // Empty dependency array to run only once on mount
+
+  const loadDeleted = async () => {
+    try {
+      const response = (await CentralizedApi.organizers.deleted()) as { data: { organizers: DeletedOrganiser[]; recoveryDays?: number } };
+      setDeletedOrganisers(response.data.organizers);
+      if (response.data.recoveryDays) setRecoveryDays(response.data.recoveryDays);
+    } catch {
+      setDeletedOrganisers(null);
+    }
+  };
 
   // Update filtered organizers when API data changes or filters change
   useEffect(() => {
@@ -86,10 +115,19 @@ const OrganiserManagement = () => {
   };
 
   const handleDeleteOrganizer = async (organizerId: string, name: string) => {
-    if (window.confirm(`Delete ${name}? This can't be undone.`)) {
+    const recoverable = deletedOrganisers !== null;
+    const warning = recoverable
+      ? `They are hidden and signed out straight away. You can restore them from "Recently deleted" for ${recoveryDays} days; after that they are removed for good.`
+      : "This can't be undone.";
+    if (window.confirm(`Delete ${name}?\n\n${warning}`)) {
       try {
-        await api.deleteOrganizer(organizerId);
-        toast({ title: "Organiser deleted", description: name });
+        const response: any = await api.deleteOrganizer(organizerId);
+        const until = response?.data?.organizer?.recoverableUntil;
+        toast({
+          title: "Organiser deleted",
+          description: until ? `${name} can be restored until ${dateTime.format(new Date(until))}.` : name,
+        });
+        loadDeleted();
       } catch (error) {
         console.error('Failed to delete organizer:', error);
         toast({
@@ -98,6 +136,24 @@ const OrganiserManagement = () => {
           variant: "destructive",
         });
       }
+    }
+  };
+
+  const handleRestoreOrganizer = async (organiser: DeletedOrganiser) => {
+    setRestoring(organiser._id);
+    try {
+      await CentralizedApi.organizers.restore(organiser._id);
+      toast({ title: "Organiser restored", description: `${organiser.name} is back, with the same sign-in and events.` });
+      await Promise.all([api.fetchOrganizers(), loadDeleted()]);
+    } catch (error) {
+      toast({
+        title: "Couldn't restore organiser",
+        description: error instanceof Error ? error.message : String(error),
+        variant: "destructive",
+      });
+      loadDeleted();
+    } finally {
+      setRestoring(null);
     }
   };
 
@@ -189,11 +245,14 @@ const OrganiserManagement = () => {
 
       {/* Tabs for Different Views */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className={`grid w-full ${deletedOrganisers ? "grid-cols-5" : "grid-cols-4"}`}>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="active">Active Organisers</TabsTrigger>
           <TabsTrigger value="analytics">Analytics</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
+          {deletedOrganisers && (
+            <TabsTrigger value="deleted">Recently deleted{deletedOrganisers.length > 0 ? ` (${deletedOrganisers.length})` : ""}</TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4">
@@ -442,6 +501,42 @@ const OrganiserManagement = () => {
             </CardContent>
           </Card>
         </TabsContent>
+
+        {deletedOrganisers && (
+          <TabsContent value="deleted" className="space-y-4">
+            <Card className="border-0 shadow-lg bg-white/80 backdrop-blur-sm">
+              <CardHeader>
+                <CardTitle>Recently deleted</CardTitle>
+                <CardDescription>
+                  Deleted organisers stay here for {recoveryDays} days, then are removed for good. Until restored they are hidden and can't sign in.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {deletedOrganisers.length === 0 ? (
+                  <p className="text-sm text-gray-500">Nothing here. Organisers you delete can be restored from this tab.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {deletedOrganisers.map((organiser) => (
+                      <div key={organiser._id} className="flex items-center justify-between gap-4 p-4 bg-gray-50 rounded-lg">
+                        <div className="min-w-0">
+                          <p className="font-medium text-gray-900 truncate">{organiser.name}</p>
+                          <p className="text-sm text-gray-600 truncate">{[organiser.email, organiser.phone].filter(Boolean).join(" · ")}</p>
+                          <p className="text-xs text-gray-500 mt-1">
+                            Deleted {dateTime.format(new Date(organiser.deletedAt))} · removed for good {dateTime.format(new Date(organiser.recoverableUntil))} ({daysLeft(organiser.recoverableUntil)} day{daysLeft(organiser.recoverableUntil) === 1 ? "" : "s"} left)
+                          </p>
+                        </div>
+                        <Button variant="outline" size="sm" disabled={restoring === organiser._id} onClick={() => handleRestoreOrganizer(organiser)}>
+                          <RotateCcw className="h-4 w-4 mr-2" />
+                          {restoring === organiser._id ? "Restoring…" : "Restore"}
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
 
         <TabsContent value="settings" className="space-y-4">
           <Card className="border-0 shadow-lg bg-white/80 backdrop-blur-sm">

@@ -526,6 +526,16 @@ export const CentralizedApi = {
     delete(id: string) {
       return CentralizedApi.delete(`/organizers/${id}`);
     },
+
+    /** Organisers deleted in the last few days, who can still be restored. */
+    deleted() {
+      return CentralizedApi.get('/organizers/deleted');
+    },
+
+    /** Undo a delete: the organiser, their sign-in and their events' owner come back as they were. */
+    restore(id: string) {
+      return CentralizedApi.post(`/organizers/${id}/restore`);
+    },
   },
 
   // ===================================================================
