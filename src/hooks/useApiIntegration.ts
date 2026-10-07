@@ -74,6 +74,7 @@ interface Registration {
 }
 
 interface Organizer {
+  _id?: string; // what the backend identifies an organiser by; it never sends organiserId
   organiserId: string;
   name: string;
   email: string;

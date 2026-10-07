@@ -175,6 +175,12 @@ export const CentralizedApi = {
 
       // Step 7: Parse response
       console.log(`  Step 7️⃣ - Parsing response`);
+      // 204 (a successful delete) has no body, and parsing it would throw.
+      if (response.status === 204) {
+        console.log(`✅ [SUCCESS] ${method} ${url}`);
+        console.groupEnd();
+        return undefined as T;
+      }
       const result = await response.json();
       console.log(`    └─ Parsed successfully, data keys:`, Object.keys(result));
 

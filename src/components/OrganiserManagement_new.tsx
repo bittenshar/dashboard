@@ -8,9 +8,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Building2, Mail, Phone, Globe, MapPin, Calendar, DollarSign, Plus, Edit, Trash, Eye, Briefcase, User, TrendingUp, Activity, Search, Filter, Trash2 } from "lucide-react";
 import CreateOrganiserModal from "./CreateOrganiserModal";
 import { useApiContext } from "@/contexts/ApiIntegrationContext";
+import { useToast } from "@/hooks/use-toast";
 
 const OrganiserManagement = () => {
   const api = useApiContext();
+  const { toast } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [sortBy, setSortBy] = useState("name");
@@ -83,12 +85,18 @@ const OrganiserManagement = () => {
     }
   };
 
-  const handleDeleteOrganizer = async (organizerId: string) => {
-    if (window.confirm('Are you sure you want to delete this organizer?')) {
+  const handleDeleteOrganizer = async (organizerId: string, name: string) => {
+    if (window.confirm(`Delete ${name}? This can't be undone.`)) {
       try {
         await api.deleteOrganizer(organizerId);
+        toast({ title: "Organiser deleted", description: name });
       } catch (error) {
         console.error('Failed to delete organizer:', error);
+        toast({
+          title: "Couldn't delete organiser",
+          description: error instanceof Error ? error.message : String(error),
+          variant: "destructive",
+        });
       }
     }
   };
@@ -262,7 +270,7 @@ const OrganiserManagement = () => {
           {/* Organisers List */}
           <div className="space-y-4">
             {!api.loading.organizers && filteredOrganizers.map((organizer) => {
-              const organizerId = organizer.organiserId;
+              const organizerId = organizer._id || organizer.organiserId;
               return (
                 <Card key={organizerId} className="border-0 shadow-lg bg-white/80 backdrop-blur-sm hover:shadow-xl transition-all duration-200">
                   <CardContent className="p-6">
@@ -323,7 +331,7 @@ const OrganiserManagement = () => {
                           variant="outline" 
                           size="sm" 
                           className="text-red-600 hover:text-red-700"
-                          onClick={() => handleDeleteOrganizer(organizerId)}
+                          onClick={() => handleDeleteOrganizer(organizerId, organizer.name)}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -367,7 +375,7 @@ const OrganiserManagement = () => {
             <CardContent>
               <div className="space-y-4">
                 {filteredOrganizers.filter(o => o.status === 'active').map((organizer) => {
-                  const organizerId = organizer.organiserId;
+                  const organizerId = organizer._id || organizer.organiserId;
                   return (
                     <div key={organizerId} className="flex items-center justify-between p-4 bg-green-50 rounded-lg">
                       <div className="flex items-center space-x-4">
@@ -402,7 +410,7 @@ const OrganiserManagement = () => {
                     .sort((a, b) => (b.totalRevenue || 0) - (a.totalRevenue || 0))
                     .slice(0, 3)
                     .map((organizer, index) => {
-                      const organizerId = organizer.organiserId;
+                      const organizerId = organizer._id || organizer.organiserId;
                       return (
                         <div key={organizerId} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                           <div className="flex items-center space-x-3">
@@ -421,7 +429,7 @@ const OrganiserManagement = () => {
                 <div className="space-y-4">
                   <h4 className="font-medium">Recent Activity</h4>
                   {filteredOrganizers.map((organizer) => {
-                    const organizerId = organizer.organiserId;
+                    const organizerId = organizer._id || organizer.organiserId;
                     return (
                       <div key={organizerId} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                         <span className="font-medium">{organizer.name}</span>

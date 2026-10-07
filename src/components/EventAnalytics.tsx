@@ -409,7 +409,13 @@ const EventAnalytics = ({ eventId, eventName, onClose }: EventAnalyticsProps) =>
                         axisLine={false}
                         minTickGap={24}
                       />
-                      <YAxis tickFormatter={(v: number) => compactMoney(v)} tickLine={false} axisLine={false} width={64} />
+                      <YAxis
+                        tickFormatter={(v: number) => compactMoney(v)}
+                        tickLine={false}
+                        axisLine={false}
+                        width={64}
+                        allowDecimals={false}
+                      />
                       <ChartTooltip
                         content={({ active, payload, label }) =>
                           active && payload?.length ? (

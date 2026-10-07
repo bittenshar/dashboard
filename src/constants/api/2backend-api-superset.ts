@@ -143,7 +143,10 @@ class ApiServiceClass {
         const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
       }
-      
+
+      // 204 (a successful delete) has no body, and parsing it would throw.
+      if (response.status === 204) return undefined as T;
+
       return await response.json();
     } catch (error: any) {
       console.error(`❌ API call failed [${method} ${url}]:`, error);
