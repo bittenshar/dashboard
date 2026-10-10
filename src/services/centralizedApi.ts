@@ -485,6 +485,16 @@ export const CentralizedApi = {
       return CentralizedApi.get(`/events/${id}`);
     },
 
+    /** Organisers' events an admin has not approved yet. */
+    awaitingReview() {
+      return CentralizedApi.get('/events?review=pending&limit=100');
+    },
+
+    /** Approve an event so it goes live, or send it back with a note. */
+    review(id: string, decision: 'approve' | 'reject', note = '') {
+      return CentralizedApi.post(`/events/${id}/review`, { decision, note });
+    },
+
     create(data: any) {
       return CentralizedApi.post('/events/', data);
     },

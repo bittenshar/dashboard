@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Calendar, Users, MapPin, CreditCard, Mail, Phone, Plus, Eye, Edit, Trash, X, Ticket, Bell } from "lucide-react";
 import EventAnalytics from "./EventAnalytics";
 import CreateEventModal from "./CreateEventModal";
+import EventReviewQueue from "./EventReviewQueue";
 import EditEventModal from "./EditEventModal";
 import AdminBookTicketDialog from "./AdminBookTicketDialog";
 import EventNotificationsDialog from "./EventNotificationsDialog";
@@ -259,6 +260,8 @@ const EventManagement = () => {
         </Button>
       </div>
 
+      <EventReviewQueue onChanged={() => api.fetchEvents()} />
+
       <FaceCostSummary usage={faceUsage} />
 
       {/* Filters */}
@@ -332,7 +335,14 @@ const EventManagement = () => {
                     <CardHeader className="pb-3">
                       <div className="flex justify-between items-start">
                         <CardTitle className="text-base">{event.name}</CardTitle>
-                        {getStatusBadge(event.status)}
+                        {/* Until it is approved, that is the status that matters. */}
+                        {(event as any).review?.status === "pending" ? (
+                          <Badge className="bg-amber-100 text-amber-800">In review</Badge>
+                        ) : (event as any).review?.status === "rejected" ? (
+                          <Badge variant="destructive">Sent back</Badge>
+                        ) : (
+                          getStatusBadge(event.status)
+                        )}
                       </div>
                       <CardDescription className="line-clamp-2 text-xs">{event.description}</CardDescription>
                     </CardHeader>
