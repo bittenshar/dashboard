@@ -18,6 +18,8 @@ export interface TicketDraft {
   maxPerOrder: string;
   salesStartAt: string;
   salesEndAt: string;
+  /** Which show this ticket admits to, when the event has several; "" is a pass for all of them. */
+  showKey: string;
   isActive: boolean;
   isHidden: boolean;
 }
@@ -38,6 +40,7 @@ export const emptyTicket = (): TicketDraft => ({
   maxPerOrder: "10",
   salesStartAt: "",
   salesEndAt: "",
+  showKey: "",
   isActive: true,
   isHidden: false,
 });
@@ -92,8 +95,11 @@ export const ticketsError = (tickets: TicketDraft[]): string | null => {
   return null;
 };
 
-/** The shape the API stores, from what was typed. */
-export const ticketsPayload = (tickets: TicketDraft[]) =>
+/**
+ * The shape the API stores, from what was typed. `showStart` gives the start
+ * of the show a ticket is tied to, or null for a pass.
+ */
+export const ticketsPayload = (tickets: TicketDraft[], showStart: (ticket: TicketDraft) => string | null = () => null) =>
   tickets.map((t, i) => ({
     seatType: t.seatType.trim(),
     description: t.description || "",
@@ -108,6 +114,7 @@ export const ticketsPayload = (tickets: TicketDraft[]) =>
     maxPerOrder: Number(t.maxPerOrder) || 10,
     salesStartAt: t.salesStartAt ? new Date(t.salesStartAt).toISOString() : null,
     salesEndAt: t.salesEndAt ? new Date(t.salesEndAt).toISOString() : null,
+    showStart: showStart(t),
     isActive: t.isActive,
     isHidden: t.isHidden,
     sortOrder: i,

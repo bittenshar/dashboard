@@ -18,6 +18,7 @@ import { CentralizedApi } from "@/services/centralizedApi";
 import { AGE_LIMITS, EVENT_TYPE_GROUPS, LANGUAGES, RECURRING_DAYS, humanize } from "@/constants/eventOptions";
 import EventNotifyFields from "./EventNotifyFields";
 import TicketStudio from "./TicketStudio";
+import { type ShowDraft, at, newShow, schedulePayload, showLabel, showSpan, showStartIso, showsError, splitIntoDays } from "@/lib/shows";
 import { count, emptyTicket, money, ticketTotals, ticketsError, ticketsPayload, type TicketDraft } from "@/lib/tickets";
 import { notifyPayload } from "@/lib/eventNotify";
 import type { EventNotify } from "@/hooks/useApiIntegration";
@@ -39,16 +40,6 @@ interface Brand {
   name: string;
 }
 
-// One more day of an event that runs over several, with its own hours.
-interface ExtraDay {
-  key: string;
-  date: string;
-  startTime: string;
-  endTime: string;
-}
-
-const newDay = (): ExtraDay => ({ key: Math.random().toString(36).slice(2), date: "", startTime: "", endTime: "" });
-
 const blankForm = () => ({
   organiserId: "",
   brand: NO_BRAND,
@@ -59,10 +50,8 @@ const blankForm = () => ({
   agelimit: "All ages",
   location: "",
   locationlink: "",
-  date: "",
-  startTime: "",
-  endTime: "",
-  extraDays: [] as ExtraDay[],
+  // One entry per show. Most events have one.
+  shows: [newShow()] as ShowDraft[],
   isRecurring: false,
   recurringDays: "everyday",
   recurringEndDate: "",
@@ -71,12 +60,12 @@ const blankForm = () => ({
 });
 
 type FormState = ReturnType<typeof blankForm>;
-type Errors = Partial<Record<keyof FormState | "coverImage" | "seatings", string>>;
+type Errors = Partial<Record<Exclude<keyof FormState, "shows"> | "shows" | "coverImage" | "seatings", string>>;
 
 // Top to bottom, so the first problem found is the first one on screen.
 const FIELD_ORDER: Array<keyof Errors> = [
-  "organiserId", "name", "description", "coverImage", "date", "startTime", "endTime",
-  "extraDays", "location", "locationlink", "recurringEndDate", "seatings", "allowedDomains",
+  "organiserId", "name", "description", "coverImage", "shows",
+  "location", "locationlink", "recurringEndDate", "seatings", "allowedDomains",
 ];
 
 const Section = ({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) => (
@@ -155,15 +144,16 @@ const CreateEventModal = ({ isOpen, onClose, onEventCreated }: CreateEventModalP
   );
   const organiser = organisers.find((o) => o.id === form.organiserId);
   const totals = ticketTotals(tickets);
-  // "Repeats weekly" and "runs over several days" are different things; an
-  // event with extra days is not also a repeating one.
-  const repeats = form.isRecurring && form.extraDays.length === 0;
+  const first = form.shows[0];
+  // A repeating event is one show on a rule; several shows is the other way
+  // to run more than once.
+  const repeats = form.isRecurring && form.shows.length === 1;
 
-  const setDays = (extraDays: ExtraDay[]) => {
-    setForm((f) => ({ ...f, extraDays }));
-    setErrors((e) => ({ ...e, extraDays: undefined }));
+  const setShows = (shows: ShowDraft[]) => {
+    setForm((f) => ({ ...f, shows }));
+    setErrors((e) => ({ ...e, shows: undefined }));
   };
-  const setDay = (key: string, patch: Partial<ExtraDay>) => setDays(form.extraDays.map((d) => (d.key === key ? { ...d, ...patch } : d)));
+  const setShow = (key: string, patch: Partial<ShowDraft>) => setShows(form.shows.map((d) => (d.key === key ? { ...d, ...patch } : d)));
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((f) => ({ ...f, [key]: value, ...(key === "organiserId" && { brand: NO_BRAND }) }));
@@ -201,21 +191,12 @@ const CreateEventModal = ({ isOpen, onClose, onEventCreated }: CreateEventModalP
     if (!form.name.trim()) e.name = "Give the event a name";
     if (!form.description.trim()) e.description = "Describe what people are coming to";
     if (!imageFile) e.coverImage = "A cover image is required";
-    if (!form.date) e.date = "Pick a date";
-    if (!form.startTime) e.startTime = "Pick a start time";
-    if (!form.endTime) e.endTime = "Pick an end time";
     if (!form.location.trim()) e.location = "Where is it happening?";
     if (!form.locationlink.trim()) e.locationlink = "Add a Google Maps link (or the join link for an online event)";
-    // Same rules as the server: every day complete, each later than the one before.
-    let previous = form.date;
-    form.extraDays.forEach((d, i) => {
-      if (e.extraDays) return;
-      const label = `Day ${i + 2}`;
-      if (!d.date || !d.startTime || !d.endTime) e.extraDays = `${label}: pick a date, a start time and an end time.`;
-      else if (d.startTime === d.endTime) e.extraDays = `${label}: the end time must be different from the start time.`;
-      else if (previous && d.date <= previous) e.extraDays = `${label} must be on a later date than day ${i + 1}.`;
-      previous = d.date;
-    });
+    // Same rules as the server: every show complete, ending after it starts,
+    // and none starting before the one before it ends.
+    const showProblem = showsError(form.shows);
+    if (showProblem) e.shows = showProblem;
     if (repeats && !form.recurringEndDate) e.recurringEndDate = "Recurring events need an end date";
     const ticketProblem = ticketsError(tickets);
     if (ticketProblem) e.seatings = ticketProblem;
@@ -239,9 +220,6 @@ const CreateEventModal = ({ isOpen, onClose, onEventCreated }: CreateEventModalP
     setLoading(true);
     try {
       const fd = new FormData();
-      // Times are stored as typed, the way the publisher stores them.
-      const at = (time: string) => new Date(`${form.date}T${time}:00.000Z`).toISOString();
-
       fd.append("name", form.name.trim());
       fd.append("description", form.description.trim());
       fd.append("eventType", form.eventType);
@@ -249,24 +227,16 @@ const CreateEventModal = ({ isOpen, onClose, onEventCreated }: CreateEventModalP
       fd.append("agelimit", form.agelimit);
       fd.append("location", form.location.trim());
       fd.append("locationlink", form.locationlink.trim());
-      fd.append("date", new Date(`${form.date}T00:00:00.000Z`).toISOString());
-      fd.append("startTime", at(form.startTime));
-      fd.append("endTime", at(form.endTime));
+      // The first show, in the shape every version of the API understands.
+      fd.append("date", at(first.date).toISOString());
+      fd.append("startTime", at(first.date, first.startTime).toISOString());
+      fd.append("endTime", at(first.date, first.endTime).toISOString());
       fd.append("organizer", form.organiserId);
       if (form.brand !== NO_BRAND) fd.append("brand", form.brand);
 
-      // Every day with its own hours. The server works the event's overall date
-      // and start/end out of these; the three fields above are day 1.
-      fd.append(
-        "schedule",
-        JSON.stringify(
-          [form, ...form.extraDays].map((d) => ({
-            date: new Date(`${d.date}T00:00:00.000Z`).toISOString(),
-            startTime: new Date(`${d.date}T${d.startTime}:00.000Z`).toISOString(),
-            endTime: new Date(`${d.date}T${d.endTime}:00.000Z`).toISOString(),
-          }))
-        )
-      );
+      // Every show with its own start and end. The server works the event's
+      // overall date and start/end out of these.
+      fd.append("schedule", JSON.stringify(schedulePayload(form.shows)));
 
       fd.append("isRecurring", String(repeats));
       if (repeats) {
@@ -279,7 +249,9 @@ const CreateEventModal = ({ isOpen, onClose, onEventCreated }: CreateEventModalP
         form.allowedDomains.split(",").map((d) => d.trim()).filter(Boolean).forEach((d) => fd.append("allowedDomains[]", d));
       }
 
-      fd.append("seatings", JSON.stringify(ticketsPayload(tickets)));
+      // A ticket is tied to one show, or is a pass for all of them.
+      const showOf = (t: TicketDraft) => (form.shows.length > 1 ? form.shows.find((d) => d.key === t.showKey) : undefined);
+      fd.append("seatings", JSON.stringify(ticketsPayload(tickets, (t) => { const show = showOf(t); return show ? showStartIso(show) : null; })));
       fd.append("coverImage", imageFile as File);
 
       const announce = notifyPayload(notify);
@@ -424,51 +396,110 @@ const CreateEventModal = ({ isOpen, onClose, onEventCreated }: CreateEventModalP
 
           {/* ---------------- Date & venue ---------------- */}
           <Section title="Date & venue" subtitle="When it happens, and how people find it.">
-            {form.extraDays.length > 0 && <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Day 1</p>}
-            <div className="grid gap-5 sm:grid-cols-3">
-              <Field id="date" label="Date" required error={errors.date}>
-                <Input id="date" type="date" value={form.date} onChange={text("date")} className="glass-input" />
-              </Field>
-              <Field id="startTime" label="Start time" required error={errors.startTime}>
-                <Input id="startTime" type="time" value={form.startTime} onChange={text("startTime")} className="glass-input" />
-              </Field>
-              <Field id="endTime" label="End time" required error={errors.endTime} hint="Past midnight is fine.">
-                <Input id="endTime" type="time" value={form.endTime} onChange={text("endTime")} className="glass-input" />
-              </Field>
+            {/* Format */}
+            <div className="grid gap-3 sm:grid-cols-2">
+              {([
+                [false, "Single event", "Happens once, or as shows you list yourself"],
+                [true, "Recurring event", "The same show repeating on a pattern"],
+              ] as const).map(([value, title, hint]) => (
+                <button
+                  key={title}
+                  type="button"
+                  disabled={value && form.shows.length > 1}
+                  aria-pressed={repeats === value}
+                  // A repeating show starts and ends on the same date.
+                  onClick={() => setForm((f) => ({ ...f, isRecurring: value, shows: value ? f.shows.map((d) => ({ ...d, endDate: d.date })) : f.shows }))}
+                  className={`rounded-lg border p-4 text-left transition-colors disabled:opacity-50 ${repeats === value ? "border-violet-500 bg-violet-50" : "border-gray-200 bg-white hover:border-gray-300"}`}
+                >
+                  <p className="text-sm font-medium text-gray-900">{title}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{value && form.shows.length > 1 ? "Not available with several shows." : hint}</p>
+                </button>
+              ))}
             </div>
 
-            {/* More days, each with its own hours */}
-            <div className="space-y-5" data-field="extraDays">
-              {form.extraDays.map((d, i) => (
-                <div key={d.key} className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Day {i + 2}</p>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => setDays(form.extraDays.filter((x) => x.key !== d.key))}>
-                      <Trash2 className="mr-2 h-4 w-4" /> Remove day
-                    </Button>
+            {/* Shows, each with its own start and end */}
+            <div className="space-y-5" data-field="shows">
+              {form.shows.map((d, i) => {
+                const span = showSpan(d);
+                return (
+                  <div key={d.key} className="space-y-3">
+                    {form.shows.length > 1 && (
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Show {i + 1}</p>
+                        <Button type="button" variant="ghost" size="sm" onClick={() => setShows(form.shows.filter((x) => x.key !== d.key))}>
+                          <Trash2 className="mr-2 h-4 w-4" /> Remove show
+                        </Button>
+                      </div>
+                    )}
+                    <div className="grid gap-5 sm:grid-cols-2">
+                      <Field id={`show-${d.key}-date`} label="Start date" required>
+                        <Input
+                          id={`show-${d.key}-date`}
+                          type="date"
+                          value={d.date}
+                          onChange={(e) => setShow(d.key, { date: e.target.value, endDate: !d.endDate || d.endDate === d.date || d.endDate < e.target.value ? e.target.value : d.endDate })}
+                          className="glass-input"
+                        />
+                      </Field>
+                      <Field id={`show-${d.key}-start`} label="Start time" required>
+                        <Input id={`show-${d.key}-start`} type="time" value={d.startTime} onChange={(e) => setShow(d.key, { startTime: e.target.value })} className="glass-input" />
+                      </Field>
+                      {!repeats && (
+                        <Field id={`show-${d.key}-endDate`} label="End date" required>
+                          <Input id={`show-${d.key}-endDate`} type="date" value={d.endDate || d.date} min={d.date || undefined} onChange={(e) => setShow(d.key, { endDate: e.target.value })} className="glass-input" />
+                        </Field>
+                      )}
+                      <Field id={`show-${d.key}-end`} label="End time" required hint={repeats || !d.endDate || d.endDate === d.date ? "Past midnight is fine." : undefined}>
+                        <Input id={`show-${d.key}-end`} type="time" value={d.endTime} onChange={(e) => setShow(d.key, { endTime: e.target.value })} className="glass-input" />
+                      </Field>
+                    </div>
+
+                    {span && span.end > span.start && !repeats && (
+                      <p className="text-xs text-muted-foreground">
+                        Duration: {span.hours} hour{span.hours === 1 ? "" : "s"}
+                        {span.calendarDays > 1 ? ` (spans ${span.calendarDays} calendar days)` : ""}
+                      </p>
+                    )}
+
+                    {/* A show across days: one ticket, or one per day? */}
+                    {span && span.days > 1 && !repeats && (
+                      <div className="space-y-3 rounded-lg bg-gray-50 p-4">
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">This show spans {span.days} days</p>
+                          <p className="mt-0.5 text-xs text-muted-foreground">How would you like to set up the tickets?</p>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <div className="rounded-lg border border-violet-500 bg-white p-4">
+                            <p className="text-sm font-medium text-gray-900">One ticket for all days</p>
+                            <p className="mt-0.5 text-xs text-muted-foreground">One pass admits for the whole show. This is how it is set now.</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setShows(form.shows.flatMap((x) => (x.key === d.key ? splitIntoDays(d) : [x])))}
+                            className="rounded-lg border border-gray-200 bg-white p-4 text-left transition-colors hover:border-gray-300"
+                          >
+                            <p className="text-sm font-medium text-gray-900">Different tickets for different days</p>
+                            <p className="mt-0.5 text-xs text-muted-foreground">
+                              Splits this into {span.days} shows, one per day, which you can then give their own hours. Each ticket says which day it is for.
+                            </p>
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <div className="grid gap-5 sm:grid-cols-3">
-                    <Field id={`day-${d.key}-date`} label="Date" required>
-                      <Input id={`day-${d.key}-date`} type="date" value={d.date} min={form.date || undefined} onChange={(e) => setDay(d.key, { date: e.target.value })} className="glass-input" />
-                    </Field>
-                    <Field id={`day-${d.key}-start`} label="Start time" required>
-                      <Input id={`day-${d.key}-start`} type="time" value={d.startTime} onChange={(e) => setDay(d.key, { startTime: e.target.value })} className="glass-input" />
-                    </Field>
-                    <Field id={`day-${d.key}-end`} label="End time" required>
-                      <Input id={`day-${d.key}-end`} type="time" value={d.endTime} onChange={(e) => setDay(d.key, { endTime: e.target.value })} className="glass-input" />
-                    </Field>
-                  </div>
+                );
+              })}
+
+              {errors.shows && <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{errors.shows}</p>}
+
+              {!repeats && (
+                <div>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setShows([...form.shows, newShow()])}>
+                    <Plus className="mr-2 h-4 w-4" /> Add show
+                  </Button>
+                  <p className="mt-2 text-xs text-muted-foreground">Another date or time for the same event. Tickets can be for one show or a pass for all of them.</p>
                 </div>
-              ))}
-
-              {errors.extraDays && <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{errors.extraDays}</p>}
-
-              <div>
-                <Button type="button" variant="outline" size="sm" onClick={() => setDays([...form.extraDays, newDay()])}>
-                  <Plus className="mr-2 h-4 w-4" /> Add another day
-                </Button>
-                <p className="mt-2 text-xs text-muted-foreground">For an event that runs over several days. Each day gets its own date and hours.</p>
-              </div>
+              )}
             </div>
 
             <Field id="location" label="Venue" required error={errors.location} hint="For an online event, name the platform.">
@@ -479,19 +510,7 @@ const CreateEventModal = ({ isOpen, onClose, onEventCreated }: CreateEventModalP
               <Input id="locationlink" type="url" value={form.locationlink} onChange={text("locationlink")} placeholder="https://maps.app.goo.gl/…" className="glass-input" />
             </Field>
 
-            <div className="space-y-5 border-t pt-5">
-              <div className="flex items-start gap-3">
-                <Switch id="isRecurring" checked={repeats} disabled={form.extraDays.length > 0} onCheckedChange={(v) => set("isRecurring", v)} />
-                <div>
-                  <Label htmlFor="isRecurring">This event repeats</Label>
-                  <p className="text-xs text-muted-foreground">
-                    {form.extraDays.length > 0
-                      ? "Not available for an event with several days. Remove the extra days to use it."
-                      : "A weekly night or a run of shows, rather than a one-off."}
-                  </p>
-                </div>
-              </div>
-
+            <div className="space-y-5">
               {repeats && (
                 <div className="grid gap-5 sm:grid-cols-2">
                   <Field id="recurringDays" label="Repeats on" required>
@@ -503,7 +522,7 @@ const CreateEventModal = ({ isOpen, onClose, onEventCreated }: CreateEventModalP
                     </Select>
                   </Field>
                   <Field id="recurringEndDate" label="Repeats until" required error={errors.recurringEndDate}>
-                    <Input id="recurringEndDate" type="date" value={form.recurringEndDate} onChange={text("recurringEndDate")} min={form.date} className="glass-input" />
+                    <Input id="recurringEndDate" type="date" value={form.recurringEndDate} onChange={text("recurringEndDate")} min={first.date} className="glass-input" />
                   </Field>
                 </div>
               )}
@@ -520,6 +539,7 @@ const CreateEventModal = ({ isOpen, onClose, onEventCreated }: CreateEventModalP
                   setErrors((e) => ({ ...e, seatings: undefined }));
                 }}
                 error={errors.seatings}
+                shows={form.shows.length > 1 ? form.shows.map((d, i) => ({ key: d.key, label: showLabel(d, i) })) : []}
               />
             </div>
           </Section>

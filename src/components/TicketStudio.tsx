@@ -44,10 +44,22 @@ interface TicketRowProps {
   onChange: (patch: Partial<TicketDraft>) => void;
   onRemove: () => void;
   onDuplicate: () => void;
+  shows: ShowOption[];
 }
 
-function TicketRow({ ticket, index, expanded, canRemove, onToggle, onChange, onRemove, onDuplicate }: TicketRowProps) {
+/** A show a ticket can be tied to. */
+export interface ShowOption {
+  key: string;
+  label: string;
+}
+
+// Radix Select has no empty value, so "every show" needs a name of its own.
+const ALL_SHOWS = "all";
+
+function TicketRow({ ticket, index, expanded, canRemove, onToggle, onChange, onRemove, onDuplicate, shows }: TicketRowProps) {
   const id = (field: string) => `ticket-${ticket.key}-${field}`;
+  // A ticket whose show has since been removed falls back to a pass.
+  const show = shows.find((s) => s.key === ticket.showKey);
   const text = (field: keyof TicketDraft) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     onChange({ [field]: e.target.value });
 
@@ -70,6 +82,7 @@ function TicketRow({ ticket, index, expanded, canRemove, onToggle, onChange, onR
             <span className="mt-0.5 block text-xs tabular-nums text-gray-500">
               {isComp ? "Free" : money(Number(ticket.price))} · {count(Number(ticket.totalSeats))} available
               {ticket.maxPerOrder ? ` · max ${ticket.maxPerOrder}/order` : ""}
+              {shows.length > 0 ? ` · ${show ? show.label : "All shows"}` : ""}
             </span>
           </span>
         </button>
@@ -99,6 +112,20 @@ function TicketRow({ ticket, index, expanded, canRemove, onToggle, onChange, onR
               <Hint>{TICKET_TYPES.find((t) => t.value === ticket.ticketType)?.hint}</Hint>
             </div>
           </div>
+
+          {shows.length > 0 && (
+            <div className="space-y-2">
+              <Label htmlFor={id("show")}>Valid for</Label>
+              <Select value={show ? ticket.showKey : ALL_SHOWS} onValueChange={(v) => onChange({ showKey: v === ALL_SHOWS ? "" : v })}>
+                <SelectTrigger id={id("show")} className="glass-input"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_SHOWS}>All shows (pass)</SelectItem>
+                  {shows.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Hint>{show ? "Admits to this show only." : "A pass: admits to every show of this event."}</Hint>
+            </div>
+          )}
 
           <div className="space-y-2">
             <Label htmlFor={id("description")}>Description</Label>
@@ -213,9 +240,11 @@ interface TicketStudioProps {
   tickets: TicketDraft[];
   onChange: (tickets: TicketDraft[]) => void;
   error?: string | null;
+  /** The event's shows, when it has more than one. */
+  shows?: ShowOption[];
 }
 
-export default function TicketStudio({ tickets, onChange, error }: TicketStudioProps) {
+export default function TicketStudio({ tickets, onChange, error, shows = [] }: TicketStudioProps) {
   // The first ticket starts open, so a new event isn't a wall of collapsed rows.
   const [expandedKey, setExpandedKey] = useState<string | null>(tickets[0]?.key ?? null);
 
@@ -251,6 +280,7 @@ export default function TicketStudio({ tickets, onChange, error }: TicketStudioP
             onChange={(patch) => update(ticket.key, patch)}
             onRemove={() => onChange(tickets.filter((t) => t.key !== ticket.key))}
             onDuplicate={() => duplicate(ticket)}
+            shows={shows}
           />
         ))}
       </div>
