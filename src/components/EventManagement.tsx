@@ -670,8 +670,7 @@ const EventManagement = () => {
         isOpen={showCreateModal}
         onClose={() => setShowCreateModal(false)}
         onEventCreated={() => {
-          // api.createEvent already refreshes the events list, no need to call again
-          // This is just a callback to close the modal
+          // The modal refreshes the events list itself.
         }}
       />
 

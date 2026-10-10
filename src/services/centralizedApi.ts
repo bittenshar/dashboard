@@ -489,6 +489,16 @@ export const CentralizedApi = {
       return CentralizedApi.post('/events/', data);
     },
 
+    /** Create an event from the full form: every field plus the cover image file. */
+    async createFromForm(form: FormData) {
+      // Let the browser set the multipart Content-Type (with its boundary).
+      const { 'Content-Type': _json, ...headers } = CentralizedApi.getAuthHeaders();
+      const response = await fetch(CentralizedApi.buildUrl('/events'), { method: 'POST', headers, body: form });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
+      return result;
+    },
+
     update(id: string, data: any) {
       return CentralizedApi.put(`/events/${id}`, data);
     },
@@ -525,6 +535,11 @@ export const CentralizedApi = {
 
     delete(id: string) {
       return CentralizedApi.delete(`/organizers/${id}`);
+    },
+
+    /** The approved brands an organiser's event can be published under. */
+    brands(id: string) {
+      return CentralizedApi.get(`/organizers/${id}/brands`);
     },
 
     /** Organisers deleted in the last few days, who can still be restored. */
