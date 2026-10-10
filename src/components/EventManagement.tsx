@@ -9,6 +9,8 @@ import { Calendar, Users, MapPin, CreditCard, Mail, Phone, Plus, Eye, Edit, Tras
 import EventAnalytics from "./EventAnalytics";
 import CreateEventModal from "./CreateEventModal";
 import EventReviewQueue from "./EventReviewQueue";
+import EventDetailsPanel from "./EventDetailsPanel";
+import { reviewStatusOf } from "@/lib/eventDisplay";
 import EditEventModal from "./EditEventModal";
 import AdminBookTicketDialog from "./AdminBookTicketDialog";
 import EventNotificationsDialog from "./EventNotificationsDialog";
@@ -60,6 +62,8 @@ const EventManagement = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api.events]);
   const [showEventModal, setShowEventModal] = useState(false);
+  // Bumped after a review decision made elsewhere, so the queue loads again.
+  const [reviewChanges, setReviewChanges] = useState(0);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [filteredEvents, setFilteredEvents] = useState<any[]>([]);
@@ -260,7 +264,7 @@ const EventManagement = () => {
         </Button>
       </div>
 
-      <EventReviewQueue onChanged={() => api.fetchEvents()} />
+      <EventReviewQueue onChanged={() => api.fetchEvents()} refreshKey={reviewChanges} />
 
       <FaceCostSummary usage={faceUsage} />
 
@@ -339,7 +343,7 @@ const EventManagement = () => {
                         {(event as any).review?.status === "pending" ? (
                           <Badge className="bg-amber-100 text-amber-800">In review</Badge>
                         ) : (event as any).review?.status === "rejected" ? (
-                          <Badge variant="destructive">Sent back</Badge>
+                          <Badge variant="destructive">Stopped</Badge>
                         ) : (
                           getStatusBadge(event.status)
                         )}
@@ -411,7 +415,7 @@ const EventManagement = () => {
           />
           
           {/* Clean Modal Panel */}
-          <div className={`relative w-full max-w-4xl max-h-[90vh] bg-white shadow-xl rounded-lg transform transition-all duration-300 ease-out overflow-hidden ${
+          <div className={`relative flex flex-col w-full max-w-4xl max-h-[90vh] bg-white shadow-xl rounded-lg transform transition-all duration-300 ease-out overflow-hidden ${
             showEventModal ? 'scale-100 opacity-100' : 'scale-95 opacity-0'
           }`}>
             {(() => {
@@ -428,11 +432,13 @@ const EventManagement = () => {
               const totalTickets = figures.capacity;
               const revenue = figures.revenue;
               const progressPercentage = calculateProgress(soldTickets, totalTickets);
+              // Booking and announcing only make sense once people can see the event.
+              const isLive = reviewStatusOf(currentEvent as any) === "approved";
               
               return (
-                <div className="flex flex-col h-full">
+                <div className="flex flex-col flex-1 min-h-0">
                   {/* Clean Header */}
-                  <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-gray-50">
+                  <div className="flex shrink-0 items-center justify-between p-6 border-b border-gray-200 bg-gray-50">
                     <div>
                       <h2 className="text-2xl font-semibold text-gray-900">{currentEvent.name}</h2>
                       <p className="text-gray-600 mt-1">Event Details</p>
@@ -451,7 +457,16 @@ const EventManagement = () => {
                   </div>
 
                   {/* Content Area */}
-                  <div className="flex-1 overflow-y-auto p-6">
+                  <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-6">
+                    {/* What the event is, and whether it is live */}
+                    <EventDetailsPanel
+                      event={currentEvent as any}
+                      onChanged={() => {
+                        api.fetchEvents();
+                        setReviewChanges((n) => n + 1);
+                      }}
+                    />
+
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                       
                       {/* Left Column - Event Info */}
@@ -464,7 +479,7 @@ const EventManagement = () => {
                               <Calendar className="h-5 w-5 text-orange-600" />
                             </div>
                             <div>
-                              <h3 className="text-lg font-semibold text-gray-900">Event Statistics</h3>
+                              <h3 className="text-lg font-semibold text-gray-900">Event analytics</h3>
                               <p className="text-sm text-gray-600">{currentEvent.name}</p>
                             </div>
                           </div>
@@ -527,6 +542,7 @@ const EventManagement = () => {
                             variant="outline"
                             size="lg"
                             className="w-full h-12 border-orange-300 text-orange-700 hover:bg-orange-50 font-medium"
+                            disabled={!isLive}
                             onClick={(e) => {
                               e.stopPropagation();
                               setBookingEvent({
@@ -542,6 +558,7 @@ const EventManagement = () => {
                             variant="outline"
                             size="lg"
                             className="w-full h-12 border-orange-300 text-orange-700 hover:bg-orange-50 font-medium"
+                            disabled={!isLive}
                             onClick={(e) => {
                               e.stopPropagation();
                               setNotificationsEvent({
@@ -553,6 +570,11 @@ const EventManagement = () => {
                             <Bell className="h-4 w-4 mr-2" />
                             Notifications
                           </Button>
+                          {!isLive && (
+                            <p className="text-xs text-gray-500">
+                              Booking a ticket and notifications open up once the event is live. Approve it above first.
+                            </p>
+                          )}
                           <div className="grid grid-cols-2 gap-3">
                             <Button 
                               variant="outline" 

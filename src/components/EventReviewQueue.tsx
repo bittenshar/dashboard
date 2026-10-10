@@ -15,36 +15,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { CentralizedApi } from "@/services/centralizedApi";
+import { type ReviewableEvent as PendingEvent, MAX_NOTE, coverUrl, dayFmt, inr, showsOf, when } from "@/lib/eventDisplay";
 
-interface PendingEvent {
-  _id: string;
-  name: string;
-  description?: string;
-  location?: string;
-  locationlink?: string;
-  coverImage?: string;
-  eventType?: string;
-  startTime: string;
-  endTime: string;
-  isRecurring?: boolean;
-  schedule?: Array<{ startTime: string; endTime: string }>;
-  seatings?: Array<{ _id: string; seatType: string; price: number; totalSeats: number; ticketType?: string; showStart?: string | null }>;
-  organizer?: { name?: string; email?: string; phone?: string } | string;
-  review?: { status: string; note?: string; submittedAt?: string };
-}
-
-// Times are stored as the organiser typed them, so they are read back in UTC.
-const dayFmt = new Intl.DateTimeFormat("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
-const timeFmt = new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "UTC" });
-const when = (value: string) => `${dayFmt.format(new Date(value))}, ${timeFmt.format(new Date(value))}`;
-const inr = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
-
-const MAX_NOTE = 500;
-
-// Covers are stored as a path on the API (/api/images/…) or, rarely, a full link.
-const coverUrl = (cover: string) => (cover.startsWith("/api/") ? CentralizedApi.buildUrl(cover.slice(4)) : cover);
-
-export default function EventReviewQueue({ onChanged }: { onChanged?: () => void }) {
+export default function EventReviewQueue({ onChanged, refreshKey = 0 }: { onChanged?: () => void; /** Change this to make the queue load again. */ refreshKey?: number }) {
   const { toast } = useToast();
   const [events, setEvents] = useState<PendingEvent[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -63,7 +36,7 @@ export default function EventReviewQueue({ onChanged }: { onChanged?: () => void
 
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, refreshKey]);
 
   const decide = async (event: PendingEvent, decision: "approve" | "reject", reason = "") => {
     setBusyId(event._id);
@@ -99,7 +72,7 @@ export default function EventReviewQueue({ onChanged }: { onChanged?: () => void
       <CardContent className="space-y-3">
         {events.map((event) => {
           const organiser = typeof event.organizer === "object" ? event.organizer : undefined;
-          const shows = event.schedule?.length ? event.schedule : [{ startTime: event.startTime, endTime: event.endTime }];
+          const shows = showsOf(event);
           const tickets = event.seatings || [];
           const open = openId === event._id;
           return (
