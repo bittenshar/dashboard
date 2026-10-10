@@ -18,7 +18,7 @@ import { CentralizedApi } from "@/services/centralizedApi";
 import { AGE_LIMITS, EVENT_TYPE_GROUPS, LANGUAGES, RECURRING_DAYS, humanize } from "@/constants/eventOptions";
 import EventNotifyFields from "./EventNotifyFields";
 import TicketStudio from "./TicketStudio";
-import { type ShowDraft, at, newShow, schedulePayload, showLabel, showSpan, showStartIso, showsError, splitIntoDays } from "@/lib/shows";
+import { type ShowDraft, at, dayOnly, endOfDay, newShow, schedulePayload, showLabel, showSpan, showStartIso, showsError, splitIntoDays } from "@/lib/shows";
 import { count, emptyTicket, money, ticketTotals, ticketsError, ticketsPayload, type TicketDraft } from "@/lib/tickets";
 import { notifyPayload } from "@/lib/eventNotify";
 import type { EventNotify } from "@/hooks/useApiIntegration";
@@ -228,7 +228,7 @@ const CreateEventModal = ({ isOpen, onClose, onEventCreated }: CreateEventModalP
       fd.append("location", form.location.trim());
       fd.append("locationlink", form.locationlink.trim());
       // The first show, in the shape every version of the API understands.
-      fd.append("date", at(first.date).toISOString());
+      fd.append("date", dayOnly(first.date));
       fd.append("startTime", at(first.date, first.startTime).toISOString());
       fd.append("endTime", at(first.date, first.endTime).toISOString());
       fd.append("organizer", form.organiserId);
@@ -241,7 +241,7 @@ const CreateEventModal = ({ isOpen, onClose, onEventCreated }: CreateEventModalP
       fd.append("isRecurring", String(repeats));
       if (repeats) {
         fd.append("recurringDays", form.recurringDays);
-        fd.append("recurringEndDate", new Date(`${form.recurringEndDate}T23:59:59.000Z`).toISOString());
+        fd.append("recurringEndDate", endOfDay(form.recurringEndDate).toISOString());
       }
 
       fd.append("isRestricted", String(form.isRestricted));

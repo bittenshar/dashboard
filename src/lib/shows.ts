@@ -15,10 +15,17 @@ export interface ShowDraft {
 
 export const newShow = (): ShowDraft => ({ key: Math.random().toString(36).slice(2), date: "", startTime: "", endDate: "", endTime: "" });
 
-// Times are stored as typed, the way the publisher stores them.
-export const at = (date: string, time = "00:00") => new Date(`${date}T${time}:00.000Z`);
+// An admin types India time and buyers read India time, wherever either is.
+// What gets stored is the real moment (7:00 pm is 13:30 UTC), so the server
+// can tell when a show has started and when check-in opens.
+export const at = (date: string, time = "00:00") => new Date(`${date}T${time}:00+05:30`);
 const DAY = 86400000;
-export const addDays = (date: string, n: number) => new Date(at(date).getTime() + n * DAY).toISOString().slice(0, 10);
+/** `date` (YYYY-MM-DD) moved by `n` calendar days. */
+export const addDays = (date: string, n: number) => new Date(Date.parse(`${date}T00:00:00.000Z`) + n * DAY).toISOString().slice(0, 10);
+/** The calendar day itself, the way the API keeps an event's `date`. */
+export const dayOnly = (date: string) => `${date}T00:00:00.000Z`;
+/** The last second of `date` in India: when a "repeats until" day ends. */
+export const endOfDay = (date: string) => new Date(`${date}T23:59:59+05:30`);
 
 /** A show's real start and end, or null while it is incomplete. An end at or before the start on the same date is the next morning. */
 export const showSpan = (show: ShowDraft) => {
@@ -34,7 +41,7 @@ export const showSpan = (show: ShowDraft) => {
 };
 
 const dayLabel = (date: string) =>
-  at(date).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+  new Date(dayOnly(date)).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 
 /** "Show 2 · Sun, 22 Nov, 17:00" — how a show is named in the ticket menus. */
 export const showLabel = (show: ShowDraft, index: number) =>
@@ -72,7 +79,7 @@ export const showStartIso = (show: ShowDraft) => at(show.date, show.startTime).t
 /** The `schedule` the API stores. Only a show that really ends on another date says so. */
 export const schedulePayload = (shows: ShowDraft[]) =>
   shows.map((d) => ({
-    date: at(d.date).toISOString(),
+    date: dayOnly(d.date),
     startTime: showStartIso(d),
     endTime: at(d.endDate || d.date, d.endTime).toISOString(),
     ...(d.endDate && d.endDate !== d.date ? { endDate: at(d.endDate).toISOString() } : {}),

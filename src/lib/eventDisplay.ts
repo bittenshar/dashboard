@@ -35,9 +35,9 @@ export interface ReviewableEvent {
   review?: { status: string; note?: string; submittedAt?: string; decidedAt?: string };
 }
 
-// Times are stored as the organiser typed them, so they are read back in UTC.
-export const dayFmt = new Intl.DateTimeFormat("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
-const timeFmt = new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "UTC" });
+// Event times are real moments; everyone reads them in India time.
+export const dayFmt = new Intl.DateTimeFormat("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" });
+const timeFmt = new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" });
 export const when = (value: string) => `${dayFmt.format(new Date(value))}, ${timeFmt.format(new Date(value))}`;
 export const inr = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
 
