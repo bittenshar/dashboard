@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Briefcase, User, Mail, Phone, MapPin, Plus, Eye, EyeOff } from "lucide-react";
+import { Briefcase, User, Mail, Phone, MapPin, Plus } from "lucide-react";
 import { useApiContext } from "@/contexts/ApiIntegrationContext";
 import { useToast } from "@/hooks/use-toast";
 
@@ -23,22 +23,14 @@ const normalizePhone = (value: string) => {
   return digits.length === 10 ? `91${digits}` : digits;
 };
 
-// The backend requires a password even for code-only accounts; the publisher
-// gives those a random one nobody knows, and so do we.
-const randomPassword = () =>
-  Array.from(crypto.getRandomValues(new Uint8Array(24)), (b) => b.toString(16).padStart(2, "0")).join("");
-
 const CreateOrganiserModal = ({ isOpen, onClose, onOrganiserCreated }: CreateOrganiserModalProps) => {
   const api = useApiContext();
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
 
   const [formData, setFormData] = useState({
-    organiserId: "",
     name: "",
     email: "",
-    password: "",
     phone: "",
     address: "",
     website: "",
@@ -46,11 +38,6 @@ const CreateOrganiserModal = ({ isOpen, onClose, onOrganiserCreated }: CreateOrg
     contactPerson: "",
     status: "active"
   });
-
-  const generateOrganiserId = () => {
-    const id = `ORG${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 100).toString().padStart(2, '0')}`;
-    setFormData(prev => ({ ...prev, organiserId: id }));
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -88,23 +75,10 @@ const CreateOrganiserModal = ({ isOpen, onClose, onOrganiserCreated }: CreateOrg
         return;
       }
 
-      if (formData.password && formData.password.length < 8) {
-        toast({
-          title: "Validation Error",
-          description: "Password must be at least 8 characters long",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      console.log("Creating organiser:", { ...formData, password: formData.password ? "(set)" : "(random)" });
-
-      // Prepare organizer data for API
+      // No password: the API makes a random one and emails it to the organiser.
       const organizerData = {
-        organiserId: formData.organiserId,
         name: formData.name,
         email: normalizeEmail(formData.email),
-        password: formData.password || randomPassword(),
         phone,
         address: formData.address,
         website: formData.website || "",
@@ -122,22 +96,19 @@ const CreateOrganiserModal = ({ isOpen, onClose, onOrganiserCreated }: CreateOrg
         welcome === "failed"
           ? {
               title: "Organizer created",
-              description: `The welcome email to ${organizerData.email} couldn't be sent. Share the sign-in steps with them yourself.`,
+              description: `The welcome email to ${organizerData.email} couldn't be sent, so they don't have their password. Ask them to use "Forgot password" in the Event Manager app.`,
               variant: "destructive",
             }
           : {
               title: "Organizer created",
-              description: `A welcome email with sign-in steps and the Event Manager app links was sent to ${organizerData.email}.`,
+              description: `A welcome email with their password, sign-in steps and the Event Manager app links was sent to ${organizerData.email}.`,
             }
       );
 
       // Reset form
-      setShowPassword(false);
       setFormData({
-        organiserId: "",
         name: "",
         email: "",
-        password: "",
         phone: "",
         address: "",
         website: "",
@@ -193,26 +164,6 @@ const CreateOrganiserModal = ({ isOpen, onClose, onOrganiserCreated }: CreateOrg
 
         <form onSubmit={handleSubmit} className="space-y-6 mt-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Organiser ID */}
-            <div className="space-y-2">
-              <Label htmlFor="organiserId" className="flex items-center space-x-2">
-                <Briefcase className="h-4 w-4" />
-                <span>Organiser ID</span>
-              </Label>
-              <div className="flex space-x-2">
-                <Input
-                  id="organiserId"
-                  value={formData.organiserId}
-                  onChange={(e) => handleInputChange("organiserId", e.target.value)}
-                  placeholder="ORG001"
-                  className="glass-input"
-                />
-                <Button type="button" onClick={generateOrganiserId} variant="outline" className="hover-glow">
-                  Generate
-                </Button>
-              </div>
-            </div>
-
             {/* Organisation Name */}
             <div className="space-y-2">
               <Label htmlFor="name" className="flex items-center space-x-2">
@@ -292,33 +243,6 @@ const CreateOrganiserModal = ({ isOpen, onClose, onOrganiserCreated }: CreateOrg
               />
             </div>
 
-            {/* Password */}
-            <div className="space-y-2">
-              <Label htmlFor="password">Password (Optional)</Label>
-              <div className="relative">
-                <Input
-                  id="password"
-                  type={showPassword ? "text" : "password"}
-                  value={formData.password}
-                  onChange={(e) => handleInputChange("password", e.target.value)}
-                  placeholder="At least 8 characters"
-                  className="glass-input pr-10"
-                  autoComplete="new-password"
-                  minLength={8}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(prev => !prev)}
-                  className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground"
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                >
-                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Not needed for the publisher, which signs organisers in with a one-time code. Set one only for email-and-password sign-in.
-              </p>
-            </div>
           </div>
 
           {/* Address */}
