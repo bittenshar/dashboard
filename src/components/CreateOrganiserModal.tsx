@@ -113,12 +113,23 @@ const CreateOrganiserModal = ({ isOpen, onClose, onOrganiserCreated }: CreateOrg
         status: formData.status
       };
 
-      await api.createOrganizer(organizerData);
-      
-      toast({
-        title: "Success",
-        description: "Organizer created successfully",
-      });
+      const created: any = await api.createOrganizer(organizerData);
+
+      // The API emails the new organiser how to sign in, publish and check
+      // guests in, and says whether that email went.
+      const welcome = created?.data?.welcomeEmail ?? created?.welcomeEmail ?? created?.data?.data?.welcomeEmail;
+      toast(
+        welcome === "failed"
+          ? {
+              title: "Organizer created",
+              description: `The welcome email to ${organizerData.email} couldn't be sent. Share the sign-in steps with them yourself.`,
+              variant: "destructive",
+            }
+          : {
+              title: "Organizer created",
+              description: `A welcome email with sign-in steps and the Event Manager app links was sent to ${organizerData.email}.`,
+            }
+      );
 
       // Reset form
       setShowPassword(false);
