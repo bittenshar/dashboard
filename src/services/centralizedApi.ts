@@ -473,6 +473,92 @@ export const CentralizedApi = {
   },
 
   // ===================================================================
+  // CASHFREE (admin — orders, refunds, payment links, settlements)
+  // ===================================================================
+
+  cashfree: {
+    /** Which Cashfree the server's keys are for: "production" or "sandbox" (test mode). */
+    status() {
+      return CentralizedApi.get<any>('/admin/cashfree/status');
+    },
+
+    /** The newest bookings paid through Cashfree. */
+    recentOrders(limit = 25) {
+      return CentralizedApi.get<any>(`/admin/cashfree/orders/recent?limit=${limit}`);
+    },
+
+    /** Orders that are not ticket bookings: test orders, payment links' orders, ones looked up or refunded. */
+    otherOrders() {
+      return CentralizedApi.get<any>('/admin/cashfree/orders/other');
+    },
+
+    /** Test mode only: an order paid at once with Cashfree's test UPI id, optionally split to a vendor. */
+    testOrder(body: { amount: number; note?: string; vendorId?: string }) {
+      return CentralizedApi.post<any>('/admin/cashfree/orders/test', body);
+    },
+
+    /** One order with its payments, refunds and settlement. */
+    order(orderId: string) {
+      return CentralizedApi.get<any>(`/admin/cashfree/orders/${encodeURIComponent(orderId)}`);
+    },
+
+    /** Refund all or part of a paid order; `amount` is in rupees. */
+    refund(orderId: string, amount: number, note: string) {
+      return CentralizedApi.post<any>(`/admin/cashfree/orders/${encodeURIComponent(orderId)}/refunds`, { amount, note });
+    },
+
+    links() {
+      return CentralizedApi.get<any>('/admin/cashfree/links');
+    },
+
+    link(linkId: string) {
+      return CentralizedApi.get<any>(`/admin/cashfree/links/${encodeURIComponent(linkId)}`);
+    },
+
+    createLink(body: { amount: number; purpose: string; phone: string; name?: string; email?: string; expiresInDays?: number; notify?: boolean }) {
+      return CentralizedApi.post<any>('/admin/cashfree/links', body);
+    },
+
+    cancelLink(linkId: string) {
+      return CentralizedApi.post<any>(`/admin/cashfree/links/${encodeURIComponent(linkId)}/cancel`);
+    },
+
+    /** Payouts to the bank; dates as YYYY-MM-DD. */
+    settlements(from: string, to: string, cursor?: string | null) {
+      const params = new URLSearchParams({ from, to });
+      if (cursor) params.set('cursor', cursor);
+      return CentralizedApi.get<any>(`/admin/cashfree/settlements?${params}`);
+    },
+
+    /** Refunds and link changes made from the dashboard. */
+    activity() {
+      return CentralizedApi.get<any>('/admin/cashfree/activity');
+    },
+
+    /** Easy Split vendors: the form's choices, the list, and add/change one. */
+    vendorOptions() {
+      return CentralizedApi.get<any>('/admin/cashfree/vendors/options');
+    },
+
+    vendors() {
+      return CentralizedApi.get<any>('/admin/cashfree/vendors');
+    },
+
+    createVendor(body: Record<string, unknown>) {
+      return CentralizedApi.post<any>('/admin/cashfree/vendors', body);
+    },
+
+    /** Bring in a vendor that was made in Cashfree's own dashboard. */
+    importVendor(vendorId: string, organizerId?: string) {
+      return CentralizedApi.post<any>('/admin/cashfree/vendors/import', { vendorId, organizerId });
+    },
+
+    updateVendor(vendorId: string, changes: Record<string, unknown>) {
+      return CentralizedApi.patch<any>(`/admin/cashfree/vendors/${encodeURIComponent(vendorId)}`, changes);
+    },
+  },
+
+  // ===================================================================
   // EVENT ENDPOINTS
   // ===================================================================
 

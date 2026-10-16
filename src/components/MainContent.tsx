@@ -21,6 +21,7 @@ import AdminPanel from "./AdminPanel";
 import AdsManagement from "./AdsManagement";
 import FaceIdCheck from "./FaceIdCheck";
 import Notifications from "./Notifications";
+import CashfreePayments from "./CashfreePayments";
 
 const MainContent = () => {
   const api = useApiContext();
@@ -231,6 +232,11 @@ const MainContent = () => {
             </PermissionGuard>
           } />
           
+          <Route path="/payments" element={
+            <PermissionGuard requiredPermission="admin">
+              <CashfreePayments />
+            </PermissionGuard>
+          } />
           <Route path="/ads" element={
             <PermissionGuard requiredPermission="admin">
               <AdsManagement />

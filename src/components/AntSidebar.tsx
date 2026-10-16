@@ -10,6 +10,7 @@ import {
   PlusOutlined,
   NotificationOutlined,
   ScanOutlined,
+  WalletOutlined,
 } from "@ant-design/icons";
 import { Badge, Button, Menu, Switch } from "antd";
 import type { MenuProps } from "antd";
@@ -30,6 +31,7 @@ const items: MenuItem[] = [
   { key: "/admin", icon: <AppstoreOutlined />, label: "Admin" },
   { key: "/organisers", icon: <MailOutlined />, label: "Organisers" },
   { key: "/ads", icon: <AppstoreOutlined />, label: "Ads Management" },
+  { key: "/payments", icon: <WalletOutlined />, label: "Payments (Cashfree)" },
   { key: "/analytics", icon: <PieChartOutlined />, label: "Analytics" },
 
 
